@@ -899,6 +899,48 @@
         handleIncomingPeerData(senderUser, packet);
       };
     }
+    // Sync account/friend/group changes made in another tab or window
+    function handleStorageSyncEvent(event) {
+      if (!event || !currentUser) return;
+      if (event.key === STORAGE_ACCOUNTS_KEY && event.newValue) {
+        try {
+          const parsed = JSON.parse(event.newValue);
+          const updatedAcct = parsed?.[currentUser.username];
+          if (updatedAcct && typeof updatedAcct === 'object') {
+            currentUser.friends = Array.from(
+              new Set((updatedAcct.friends || []).map(normalizeUsername).filter(Boolean))
+            );
+            if (!currentUser.friends.includes(DEMO_BOT_USERNAME)) {
+              currentUser.friends.push(DEMO_BOT_USERNAME);
+            }
+            currentGroups = updatedAcct.groups && typeof updatedAcct.groups === 'object'
+              ? { ...updatedAcct.groups }
+              : {};
+            currentUser.groups = currentGroups;
+            if (selectedFriend && !isGroupChatId(selectedFriend) && selectedFriend !== DEMO_BOT_USERNAME) {
+              if (!currentUser.friends.includes(selectedFriend)) {
+                selectedFriend = null;
+                const activeContainer = document.getElementById('chat-active-container');
+                const emptyState = document.getElementById('chat-empty-state');
+                if (activeContainer) activeContainer.classList.add('hidden');
+                if (emptyState) emptyState.classList.remove('hidden');
+              }
+            } else if (selectedFriend && isGroupChatId(selectedFriend) && !currentGroups[selectedFriend]) {
+              selectedFriend = null;
+              const activeContainer = document.getElementById('chat-active-container');
+              const emptyState = document.getElementById('chat-empty-state');
+              if (activeContainer) activeContainer.classList.add('hidden');
+              if (emptyState) emptyState.classList.remove('hidden');
+            }
+            renderInbox();
+            updateActiveChatHeader();
+          }
+        } catch {}
+      } else if (event.key === STORAGE_BG_THEME_KEY && event.newValue) {
+        setBackgroundTheme(event.newValue);
+      }
+    }
+    // Populate twinkling SVG stars into a target <g> container
     function populateStarsIntoGroup(groupEl, count, width, height) {
       if (!groupEl) return;
       groupEl.innerHTML = '';
@@ -1738,7 +1780,7 @@
         }
       } catch {}
     }
-    function enableLocalSandboxFallback() {
+    function enableLocalSandboxFallback(_reason = null) {
       if (localBridgeActive) return;
       localBridgeActive = true;
       peerReady = false;
@@ -1853,6 +1895,41 @@
       }
       if (submitBtn) {
         submitBtn.textContent = authMode === 'signup' ? 'Create Lantern Account' : 'Enter the Village';
+      }
+    }
+    // Open a 1-on-1 or group chat room without wiping history when re-selecting the same room
+    function openChatWithFriend(roomId, options = {}) {
+      if (!roomId || !currentUser) return;
+      const cleanRoomId = isGroupChatId(roomId) ? roomId : normalizeUsername(roomId);
+      if (!cleanRoomId) return;
+      const previousRoom = selectedFriend;
+      const isSameRoom = previousRoom === cleanRoomId;
+      selectedFriend = cleanRoomId;
+      const emptyState = document.getElementById('chat-empty-state');
+      const activeContainer = document.getElementById('chat-active-container');
+      const inboxPane = document.getElementById('inbox-pane');
+      const chatPane = document.getElementById('chat-pane');
+      if (emptyState) emptyState.classList.add('hidden');
+      if (activeContainer) activeContainer.classList.remove('hidden');
+      if (window.innerWidth < 768) {
+        if (inboxPane) inboxPane.classList.add('hidden');
+        if (chatPane) {
+          chatPane.classList.remove('hidden');
+          chatPane.classList.add('flex');
+        }
+      }
+      if (options.forceReset || (!isSameRoom && previousRoom !== null)) {
+        const feed = document.getElementById('messages-feed');
+        if (feed) feed.innerHTML = '';
+        messageRegistry.clear();
+        clearReplyTarget();
+        hideFriendTypingIndicator();
+      }
+      injectChatScenery();
+      updateActiveChatHeader();
+      renderInbox();
+      if (!isGroupChatId(cleanRoomId) && cleanRoomId !== DEMO_BOT_USERNAME) {
+        connectToFriendPeer(cleanRoomId, { silentRetry: true });
       }
     }
     // Handle Sign In and Create Account form submission
@@ -2174,38 +2251,6 @@
         connectToFriendPeer(friend);
       }
       showToast(`Added @${friend}`, 'success');
-    }
-    // Open a 1-on-1 or group chat room
-    function openChatWithFriend(roomId) {
-      if (!roomId || !currentUser) return;
-      const previousRoom = selectedFriend;
-      selectedFriend = roomId;
-      const emptyState = document.getElementById('chat-empty-state');
-      const activeContainer = document.getElementById('chat-active-container');
-      const inboxPane = document.getElementById('inbox-pane');
-      const chatPane = document.getElementById('chat-pane');
-      if (emptyState) emptyState.classList.add('hidden');
-      if (activeContainer) activeContainer.classList.remove('hidden');
-      if (window.innerWidth < 768) {
-        if (inboxPane) inboxPane.classList.add('hidden');
-        if (chatPane) {
-          chatPane.classList.remove('hidden');
-          chatPane.classList.add('flex');
-        }
-      }
-      if (previousRoom !== roomId) {
-        const feed = document.getElementById('messages-feed');
-        if (feed) feed.innerHTML = '';
-        messageRegistry.clear();
-        clearReplyTarget();
-        hideFriendTypingIndicator();
-      }
-      injectChatScenery();
-      updateActiveChatHeader();
-      renderInbox();
-      if (!isGroupChatId(roomId) && roomId !== DEMO_BOT_USERNAME) {
-        connectToFriendPeer(roomId, { silentRetry: true });
-      }
     }
     // Update header info for the active friend or group chat
     function updateActiveChatHeader() {
@@ -2569,6 +2614,7 @@
     });
     window.addEventListener('pagehide', flushPersistenceBeforeUnload);
     window.addEventListener('beforeunload', flushPersistenceBeforeUnload);
+    window.addEventListener('storage', handleStorageSyncEvent);
     window.addEventListener('pointerdown', () => {
       if (currentUser && audioState.bgmEnabled && !audioState.bgmPlaying) {
         startAmbientBGM();
