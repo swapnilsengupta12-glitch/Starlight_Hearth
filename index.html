@@ -11,10 +11,9 @@
   <!-- PeerJS for Serverless WebRTC Peer-to-Peer Connections -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
-  <!-- Google Fonts: Cinzel for Fantasy Serif Headings, Plus Jakarta Sans for Clean UI -->
+  <!-- Google Fonts: Cinzel for Fantasy Serif Headings, Inter & Plus Jakarta Sans for Clean UI -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <script>
@@ -58,7 +57,6 @@
       overflow: hidden;
       background-color: #060914;
       color: #f8fafc;
-      font-family: 'Plus Jakarta Sans', sans-serif;
       font-family: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
@@ -214,7 +212,6 @@
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
     .msg-enter {
-      animation: popIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
       animation: popIn 0.26s cubic-bezier(0.22, 1, 0.36, 1) forwards;
       will-change: transform, opacity;
     }
@@ -826,6 +823,8 @@
     let activeReplyTarget = null;
     let messageSequence = 0;
     let messageRegistry = new Map();
+    let pendingOutboundQueue = new Map();
+    let reconnectTimers = new Map();
 
     const audioState = {
       ctx: null,
@@ -862,6 +861,90 @@
       }
     }
 
+    function enqueueOutboundPacket(targetUsername, packet) {
+      const target = normalizeUsername(targetUsername || '');
+      if (!target || !currentUser || target === currentUser.username) return;
+      if (!pendingOutboundQueue.has(target)) {
+        pendingOutboundQueue.set(target, []);
+      }
+      const queue = pendingOutboundQueue.get(target);
+      if (packet.type === 'group_invite' && packet.group?.id) {
+        const filtered = queue.filter(
+          (item) => !(item.type === 'group_invite' && item.group?.id === packet.group.id)
+        );
+        filtered.push(packet);
+        pendingOutboundQueue.set(target, filtered);
+      } else {
+        queue.push(packet);
+      }
+    }
+
+    function flushOutboundQueue(targetUsername) {
+      const target = normalizeUsername(targetUsername || '');
+      if (!target || !currentUser || target === currentUser.username) return;
+      const queue = pendingOutboundQueue.get(target);
+      if (!queue || queue.length === 0) return;
+
+      const remaining = [];
+      for (const packet of queue) {
+        if (localBridgeActive) {
+          broadcastLocalBridge({
+            ...packet,
+            to: target,
+            from: currentUser.username,
+            displayName: currentUser.displayName
+          });
+        } else {
+          const conn = activeConnections.get(target);
+          if (conn && conn.open) {
+            try {
+              conn.send({
+                ...packet,
+                from: currentUser.username,
+                displayName: currentUser.displayName
+              });
+            } catch {
+              remaining.push(packet);
+            }
+          } else {
+            remaining.push(packet);
+          }
+        }
+      }
+
+      if (remaining.length > 0) {
+        pendingOutboundQueue.set(target, remaining);
+      } else {
+        pendingOutboundQueue.delete(target);
+      }
+    }
+
+    function scheduleFriendReconnect(friendUsername, delayMs = 2500) {
+      const target = normalizeUsername(friendUsername || '');
+      if (!target || !currentUser || target === currentUser.username || target === DEMO_BOT_USERNAME) return;
+      if (reconnectTimers.has(target)) return;
+
+      const timer = setTimeout(() => {
+        reconnectTimers.delete(target);
+        if (!currentUser) return;
+        const conn = activeConnections.get(target);
+        if (!conn || !conn.open) {
+          connectToFriendPeer(target, { silentRetry: true });
+        }
+      }, delayMs);
+      reconnectTimers.set(target, timer);
+    }
+
+    function clearFriendReconnect(friendUsername) {
+      const target = normalizeUsername(friendUsername || '');
+      if (!target) return;
+      const timer = reconnectTimers.get(target);
+      if (timer) {
+        clearTimeout(timer);
+        reconnectTimers.delete(target);
+      }
+    }
+
     function initLocalTabBridge() {
       if (!localTabChannel && typeof BroadcastChannel !== 'undefined') {
         try {
@@ -879,6 +962,7 @@
 
         if (packet.type === 'hello' || packet.type === 'ping') {
           friendPresence.set(senderUser, 'online');
+          clearFriendReconnect(senderUser);
           if (!currentUser.friends.includes(senderUser)) {
             currentUser.friends.unshift(senderUser);
             persistCurrentUserFriends();
@@ -891,6 +975,7 @@
               displayName: currentUser.displayName
             });
           }
+          flushOutboundQueue(senderUser);
           renderInbox();
           updateActiveChatHeader();
           return;
@@ -898,107 +983,109 @@
 
         if (packet.type === 'pong') {
           if (!packet.to || packet.to === currentUser.username) {
-          friendPresence.set(senderUser, 'online');
-          renderInbox();
-          updateActiveChatHeader();
+            friendPresence.set(senderUser, 'online');
+            clearFriendReconnect(senderUser);
+            flushOutboundQueue(senderUser);
+            renderInbox();
+            updateActiveChatHeader();
+          }
+          return;
         }
-        return;
+
+        if (packet.to && packet.to !== currentUser.username) return;
+        handleIncomingPeerData(senderUser, packet);
+      };
+    }
+
+    function populateStarsIntoGroup(groupEl, count, width, height) {
+      if (!groupEl) return;
+      groupEl.innerHTML = '';
+      for (let i = 0; i < count; i++) {
+        const cx = ((i * 73 + 29) % 100) / 100 * width;
+        const cy = ((i * 41 + 17) % 52) / 100 * height;
+        const r = (i % 3 === 0) ? 1.7 : ((i % 2 === 0) ? 1.2 : 0.85);
+        const dur = (3 + (i % 5) * 1.1).toFixed(1) + 's';
+        const delay = ((i % 7) * 0.65).toFixed(2) + 's';
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', cx.toFixed(1));
+        circle.setAttribute('cy', cy.toFixed(1));
+        circle.setAttribute('r', r.toFixed(2));
+        circle.setAttribute('fill', i % 4 === 0 ? '#fde68a' : '#f8fafc');
+        circle.classList.add('star-twinkle');
+        circle.style.setProperty('--dur', dur);
+        circle.style.setProperty('--delay', delay);
+        groupEl.appendChild(circle);
       }
-
-      if (packet.to && packet.to !== currentUser.username) return;
-      handleIncomingPeerData(senderUser, packet);
-    };
-  }
-
-  function populateStarsIntoGroup(groupEl, count, width, height) {
-    if (!groupEl) return;
-    groupEl.innerHTML = '';
-    for (let i = 0; i < count; i++) {
-      const cx = ((i * 73 + 29) % 100) / 100 * width;
-      const cy = ((i * 41 + 17) % 52) / 100 * height;
-      const r = (i % 3 === 0) ? 1.7 : ((i % 2 === 0) ? 1.2 : 0.85);
-      const dur = (3 + (i % 5) * 1.1).toFixed(1) + 's';
-      const delay = ((i % 7) * 0.65).toFixed(2) + 's';
-
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', cx.toFixed(1));
-      circle.setAttribute('cy', cy.toFixed(1));
-      circle.setAttribute('r', r.toFixed(2));
-      circle.setAttribute('fill', i % 4 === 0 ? '#fde68a' : '#f8fafc');
-      circle.classList.add('star-twinkle');
-      circle.style.setProperty('--dur', dur);
-      circle.style.setProperty('--delay', delay);
-      groupEl.appendChild(circle);
     }
-  }
 
-  function populateFirefliesIntoLayer(layerEl, count) {
-    if (!layerEl) return;
-    layerEl.innerHTML = '';
-    for (let i = 0; i < count; i++) {
-      const dot = document.createElement('span');
-      dot.className = 'firefly';
-      dot.style.left = ((i * 19 + 8) % 92) + '%';
-      dot.style.top = (42 + ((i * 13) % 46)) + '%';
-      dot.style.setProperty('--dur', (6.5 + (i % 5) * 1.6) + 's');
-      dot.style.setProperty('--delay', (i * 0.9) + 's');
-      layerEl.appendChild(dot);
+    function populateFirefliesIntoLayer(layerEl, count) {
+      if (!layerEl) return;
+      layerEl.innerHTML = '';
+      for (let i = 0; i < count; i++) {
+        const dot = document.createElement('span');
+        dot.className = 'firefly';
+        dot.style.left = ((i * 19 + 8) % 92) + '%';
+        dot.style.top = (42 + ((i * 13) % 46)) + '%';
+        dot.style.setProperty('--dur', (6.5 + (i % 5) * 1.6) + 's');
+        dot.style.setProperty('--delay', (i * 0.9) + 's');
+        layerEl.appendChild(dot);
+      }
     }
-  }
 
-  function injectChatScenery() {
-    const template = document.getElementById('chat-scenery-template');
-    const body = document.getElementById('chat-scenic-body');
-    if (!template || !body || body.querySelector('.chat-inner-scenery')) return;
+    function injectChatScenery() {
+      const template = document.getElementById('chat-scenery-template');
+      const body = document.getElementById('chat-scenic-body');
+      if (!template || !body || body.querySelector('.chat-inner-scenery')) return;
 
-    const clone = template.content.cloneNode(true);
-    const starsGroup = clone.querySelector('.chat-stars-group');
-    const firefliesLayer = clone.querySelector('.chat-fireflies-layer');
-    populateStarsIntoGroup(starsGroup, 36, 1000, 700);
-    populateFirefliesIntoLayer(firefliesLayer, 10);
-    body.prepend(clone);
-  }
+      const clone = template.content.cloneNode(true);
+      const starsGroup = clone.querySelector('.chat-stars-group');
+      const firefliesLayer = clone.querySelector('.chat-fireflies-layer');
+      populateStarsIntoGroup(starsGroup, 36, 1000, 700);
+      populateFirefliesIntoLayer(firefliesLayer, 10);
+      body.prepend(clone);
+    }
 
-  function initFantasyBackdrop() {
-    populateStarsIntoGroup(document.getElementById('svg-stars'), 65, 1440, 900);
-    populateFirefliesIntoLayer(document.getElementById('fireflies-layer'), 16);
-    injectChatScenery();
-  }
+    function initFantasyBackdrop() {
+      populateStarsIntoGroup(document.getElementById('svg-stars'), 65, 1440, 900);
+      populateFirefliesIntoLayer(document.getElementById('fireflies-layer'), 16);
+      injectChatScenery();
+    }
 
-  function setBackgroundTheme(themeName) {
-    const validThemes = ['starlight', 'aurora', 'crimson', 'twilight'];
-    const chosen = validThemes.includes(themeName) ? themeName : 'starlight';
-    const rootEl = document.documentElement;
+    function setBackgroundTheme(themeName) {
+      const validThemes = ['starlight', 'aurora', 'crimson', 'twilight'];
+      const chosen = validThemes.includes(themeName) ? themeName : 'starlight';
+      const rootEl = document.documentElement;
 
-    document.body.classList.remove('theme-starlight', 'theme-aurora', 'theme-crimson', 'theme-twilight');
-    rootEl.classList.remove('theme-starlight', 'theme-aurora', 'theme-crimson', 'theme-twilight');
-    document.body.classList.add(`theme-${chosen}`);
-    rootEl.classList.add(`theme-${chosen}`);
-    document.body.dataset.bgTheme = chosen;
+      document.body.classList.remove('theme-starlight', 'theme-aurora', 'theme-crimson', 'theme-twilight');
+      rootEl.classList.remove('theme-starlight', 'theme-aurora', 'theme-crimson', 'theme-twilight');
+      document.body.classList.add(`theme-${chosen}`);
+      rootEl.classList.add(`theme-${chosen}`);
+      document.body.dataset.bgTheme = chosen;
 
-    try {
-      localStorage.setItem(STORAGE_BG_THEME_KEY, chosen);
-    } catch {}
+      try {
+        localStorage.setItem(STORAGE_BG_THEME_KEY, chosen);
+      } catch {}
 
-    const buttons = document.querySelectorAll('.bg-theme-btn');
-    buttons.forEach(btn => {
-      const isActive = btn.getAttribute('data-bg-theme') === chosen;
-      btn.classList.toggle('bg-amber-500/20', isActive);
-      btn.classList.toggle('border-amber-400/50', isActive);
-      btn.classList.toggle('bg-white/5', !isActive);
-      btn.classList.toggle('border-white/10', !isActive);
-    });
-  }
+      const buttons = document.querySelectorAll('.bg-theme-btn');
+      buttons.forEach(btn => {
+        const isActive = btn.getAttribute('data-bg-theme') === chosen;
+        btn.classList.toggle('bg-amber-500/20', isActive);
+        btn.classList.toggle('border-amber-400/50', isActive);
+        btn.classList.toggle('bg-white/5', !isActive);
+        btn.classList.toggle('border-white/10', !isActive);
+      });
+    }
 
-  function initSavedBackgroundTheme() {
-    let savedTheme = 'starlight';
-    try {
-      savedTheme = localStorage.getItem(STORAGE_BG_THEME_KEY) || 'starlight';
-    } catch {}
-    setBackgroundTheme(savedTheme);
-  }
+    function initSavedBackgroundTheme() {
+      let savedTheme = 'starlight';
+      try {
+        savedTheme = localStorage.getItem(STORAGE_BG_THEME_KEY) || 'starlight';
+      } catch {}
+      setBackgroundTheme(savedTheme);
+    }
 
-  function broadcastLocalBridge(payload) {
+    function broadcastLocalBridge(payload) {
       if (!localTabChannel || !currentUser) return;
       try {
         localTabChannel.postMessage({
@@ -1135,90 +1222,127 @@
       // Connect to all members and invite them to the group
       uniqueMembers.forEach(member => {
         if (member === currentUser.username) return;
-        connectToFriendPeer(member);
-        sendDirectPayloadToMember(member, {
-          type: 'group_invite',
-          group: groupRecord,
-          from: currentUser.username,
-          displayName: currentUser.displayName
-        });
+        deliverGroupInviteToMember(member, groupRecord);
       });
 
       showToast(`Created group "${groupName}"`, 'success');
     }
 
+    function deliverGroupInviteToMember(memberUsername, groupRecord) {
+      const target = normalizeUsername(memberUsername || '');
+      if (!target || !currentUser || target === currentUser.username) return;
+      connectToFriendPeer(target, { silentRetry: true });
+      sendDirectPayloadToMember(target, {
+        type: 'group_invite',
+        group: groupRecord,
+        from: currentUser.username,
+        displayName: currentUser.displayName
+      });
+    }
+
     function sendDirectPayloadToMember(memberUsername, payload) {
       if (!currentUser || memberUsername === currentUser.username) return;
+      const fullPayload = {
+        ...payload,
+        from: currentUser.username,
+        displayName: currentUser.displayName
+      };
+
       if (localBridgeActive) {
         broadcastLocalBridge({
-          ...payload,
-          to: memberUsername,
-          from: currentUser.username,
-          displayName: currentUser.displayName
+          ...fullPayload,
+          to: memberUsername
         });
         return;
       }
+
       const conn = activeConnections.get(memberUsername);
       if (conn && conn.open) {
-        conn.send({
-          ...payload,
-          from: currentUser.username,
-          displayName: currentUser.displayName
-        });
+        try {
+          conn.send(fullPayload);
+          return;
+        } catch {}
       }
+
+      enqueueOutboundPacket(memberUsername, fullPayload);
+      connectToFriendPeer(memberUsername, { silentRetry: true });
     }
 
-    function connectToFriendPeer(friendUsername) {
-      if (!currentUser || friendUsername === DEMO_BOT_USERNAME) return;
-      if (friendUsername === currentUser.username) return;
+    function connectToFriendPeer(friendUsername, options = {}) {
+      const target = normalizeUsername(friendUsername || '');
+      if (!currentUser || !target || target === DEMO_BOT_USERNAME) return;
+      if (target === currentUser.username) return;
 
       if (localBridgeActive) {
         broadcastLocalBridge({
           type: 'hello',
-          to: friendUsername,
+          to: target,
           from: currentUser.username,
           displayName: currentUser.displayName
         });
+        flushOutboundQueue(target);
         return;
       }
 
-      if (!peer || !peerReady) return;
+      if (!peer || !peerReady) {
+        if (!options.silentRetry) {
+          friendPresence.set(target, 'connecting');
+          renderInbox();
+          updateActiveChatHeader();
+        }
+        scheduleFriendReconnect(target, 2000);
+        return;
+      }
 
-      const existing = activeConnections.get(friendUsername);
+      const existing = activeConnections.get(target);
       if (existing && existing.open) {
-        friendPresence.set(friendUsername, 'online');
+        friendPresence.set(target, 'online');
+        clearFriendReconnect(target);
+        flushOutboundQueue(target);
         renderInbox();
         updateActiveChatHeader();
         return;
       }
 
-      if (!friendPresence.get(friendUsername)) {
-        friendPresence.set(friendUsername, 'connecting');
+      if (!options.silentRetry && friendPresence.get(target) !== 'online') {
+        friendPresence.set(target, 'connecting');
         renderInbox();
         updateActiveChatHeader();
       }
 
       try {
-        const conn = peer.connect(PEER_NAMESPACE + friendUsername, { reliable: true });
-        setupDataConnection(conn, friendUsername);
-      } catch {}
+        if (existing) {
+          try { existing.close(); } catch {}
+          activeConnections.delete(target);
+        }
+        const conn = peer.connect(PEER_NAMESPACE + target, { reliable: true });
+        setupDataConnection(conn, target);
+      } catch {
+        scheduleFriendReconnect(target, 3000);
+      }
     }
 
     function setupDataConnection(conn, expectedFriend = null) {
-      const friendKey = expectedFriend || normalizeUsername((conn.peer || '').replace(PEER_NAMESPACE, ''));
+      const friendKey = normalizeUsername(expectedFriend || (conn.peer || '').replace(PEER_NAMESPACE, ''));
 
       conn.on('open', () => {
-        if (friendKey) {
+        if (friendKey && currentUser && friendKey !== currentUser.username) {
           activeConnections.set(friendKey, conn);
           friendPresence.set(friendKey, 'online');
-          if (currentUser && !currentUser.friends.includes(friendKey)) {
+          clearFriendReconnect(friendKey);
+          if (!currentUser.friends.includes(friendKey)) {
             currentUser.friends.unshift(friendKey);
             persistCurrentUserFriends();
           }
           renderInbox();
           updateActiveChatHeader();
         }
-        conn.send({ type: 'hello', from: currentUser.username, displayName: currentUser.displayName });
+        if (currentUser) {
+          conn.send({ type: 'hello', from: currentUser.username, displayName: currentUser.displayName });
+        }
+        if (friendKey) {
+          flushOutboundQueue(friendKey);
+        }
       });
 
       conn.on('data', (data) => {
@@ -1226,26 +1350,39 @@
         const senderUser = normalizeUsername(data.from || friendKey || '');
         if (!senderUser) return;
 
-        if (senderUser && !activeConnections.has(senderUser)) {
-          activeConnections.set(senderUser, conn);
+        if (senderUser && currentUser && senderUser !== currentUser.username) {
+          if (!activeConnections.has(senderUser) || !activeConnections.get(senderUser)?.open) {
+            activeConnections.set(senderUser, conn);
+          }
+          friendPresence.set(senderUser, 'online');
+          clearFriendReconnect(senderUser);
+          flushOutboundQueue(senderUser);
         }
         handleIncomingPeerData(senderUser, data);
       });
 
       conn.on('close', () => {
         if (friendKey) {
-          activeConnections.delete(friendKey);
-          friendPresence.set(friendKey, 'offline');
-          renderInbox();
-          updateActiveChatHeader();
+          const currentConn = activeConnections.get(friendKey);
+          if (!currentConn || currentConn === conn || !currentConn.open) {
+            activeConnections.delete(friendKey);
+            friendPresence.set(friendKey, 'offline');
+            renderInbox();
+            updateActiveChatHeader();
+            scheduleFriendReconnect(friendKey, 3500);
+          }
         }
       });
 
       conn.on('error', () => {
         if (friendKey) {
-          friendPresence.set(friendKey, 'offline');
-          renderInbox();
-          updateActiveChatHeader();
+          const currentConn = activeConnections.get(friendKey);
+          if (!currentConn || !currentConn.open) {
+            friendPresence.set(friendKey, 'offline');
+            renderInbox();
+            updateActiveChatHeader();
+            scheduleFriendReconnect(friendKey, 3500);
+          }
         }
       });
     }
@@ -1257,6 +1394,9 @@
         if (currentUser && !incomingMembers.includes(currentUser.username)) {
           incomingMembers.push(currentUser.username);
         }
+        if (senderUser && !incomingMembers.includes(senderUser)) {
+          incomingMembers.push(senderUser);
+        }
         currentGroups[grp.id] = {
           id: grp.id,
           name: grp.name || 'Lantern Group',
@@ -1266,15 +1406,31 @@
         persistCurrentUserFriends();
         renderInbox();
         updateActiveChatHeader();
+
+        // Also connect back to other group members so group chat works bi-directionally
+        currentGroups[grp.id].members.forEach((member) => {
+          if (currentUser && member !== currentUser.username && member !== senderUser) {
+            connectToFriendPeer(member, { silentRetry: true });
+          }
+        });
+
         showToast(`Joined group "${currentGroups[grp.id].name}"`, 'info');
         return;
       }
 
       if (data.type === 'hello' || data.type === 'ping') {
         friendPresence.set(senderUser, 'online');
+        clearFriendReconnect(senderUser);
         if (currentUser && !currentUser.friends.includes(senderUser)) {
           currentUser.friends.unshift(senderUser);
           persistCurrentUserFriends();
+        }
+        if (data.type === 'hello' && currentUser && senderUser !== currentUser.username) {
+          const existing = activeConnections.get(senderUser);
+          if (!existing || !existing.open) {
+            connectToFriendPeer(senderUser, { silentRetry: true });
+          }
+          flushOutboundQueue(senderUser);
         }
         renderInbox();
         updateActiveChatHeader();
@@ -1630,33 +1786,10 @@
       showToast('Screen cleared', 'info');
     }
 
-    function setReplyToMessage(msgId) {
-      const record = messageRegistry.get(msgId);
-      if (!record) return;
-      activeReplyTarget = {
-        id: msgId,
-        sender: record.sender,
-        text: record.text || (record.image ? '[Photo]' : '')
-      };
-      document.getElementById('reply-preview-author').textContent = `Replying to ${activeReplyTarget.sender}`;
-      document.getElementById('reply-preview-text').textContent = activeReplyTarget.text || 'Whisper';
-      document.getElementById('reply-preview-bar').classList.remove('hidden');
-      document.getElementById('message-input').focus();
-    }
-
     function clearReplyTarget() {
       activeReplyTarget = null;
-      clearReplyBarUI();
-    }
-
-    function clearReplyBarUI() {
       const bar = document.getElementById('reply-preview-bar');
       if (bar) bar.classList.add('hidden');
-    }
-
-    function clearCurrentRoomView() {
-      document.getElementById('messages-feed').innerHTML = '';
-      showToast('Screen cleared', 'info');
     }
 
     function normalizeUsername(raw) {
@@ -1843,6 +1976,9 @@
       }
       activeConnections.clear();
       friendPresence.clear();
+      pendingOutboundQueue.clear();
+      reconnectTimers.forEach((timer) => clearTimeout(timer));
+      reconnectTimers.clear();
 
       const appScreen = document.getElementById('app-screen');
       const authScreen = document.getElementById('auth-screen');
@@ -1873,7 +2009,16 @@
 
       try {
         const clientId = PEER_NAMESPACE + username;
-        peer = new Peer(clientId, { debug: 0 });
+        peer = new Peer(clientId, {
+          debug: 0,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:global.stun.twilio.com:3478' }
+            ]
+          }
+        });
 
         peer.on('open', () => {
           peerReady = true;
@@ -1881,7 +2026,14 @@
           broadcastLocalBridge({ type: 'hello' });
           if (currentUser) {
             currentUser.friends.forEach((friend) => {
-              if (friend !== DEMO_BOT_USERNAME) connectToFriendPeer(friend);
+              if (friend !== DEMO_BOT_USERNAME) connectToFriendPeer(friend, { silentRetry: true });
+            });
+            Object.values(currentGroups).forEach((grp) => {
+              (grp.members || []).forEach((member) => {
+                if (member !== currentUser.username && member !== DEMO_BOT_USERNAME) {
+                  connectToFriendPeer(member, { silentRetry: true });
+                }
+              });
             });
           }
         });
@@ -1890,7 +2042,13 @@
           setupDataConnection(conn);
         });
 
-        peer.on('error', () => {
+        peer.on('error', (err) => {
+          if (err && err.type === 'unavailable-id') {
+            peerReady = false;
+            updateMyNetworkUI('offline', `Username @${username} open elsewhere`);
+            enableLocalSandboxFallback();
+            return;
+          }
           peerReady = false;
           enableLocalSandboxFallback();
         });
@@ -1898,6 +2056,9 @@
         peer.on('disconnected', () => {
           peerReady = false;
           updateMyNetworkUI('connecting', 'Reconnecting...');
+          try {
+            if (peer && !peer.destroyed) peer.reconnect();
+          } catch {}
         });
       } catch {
         enableLocalSandboxFallback();
@@ -2056,26 +2217,6 @@
       }
       stopAmbientBGM();
       startAmbientBGM();
-      updateBGMStatusUI();
-    }
-
-    function toggleBGMSetting(enabled) {
-      audioState.bgmEnabled = Boolean(enabled);
-      if (audioState.bgmEnabled) {
-        startAmbientBGM();
-      } else {
-        stopAmbientBGM();
-      }
-    }
-
-    function selectBGMTrack(trackId) {
-      audioState.bgmTrack = trackId || 'starlight_waltz';
-      if (trackId === 'custom' && !audioState.customAudioEl) {
-        document.getElementById('custom-bgm-input')?.click();
-      } else if (audioState.bgmEnabled) {
-        stopAmbientBGM();
-        startAmbientBGM();
-      }
       updateBGMStatusUI();
     }
 
@@ -2655,6 +2796,7 @@
       const accounts = loadStoredAccounts();
       if (activeUsername && accounts[activeUsername]) {
         enterAppWithUser(accounts[activeUsername]);
+        initPeerConnection(activeUsername);
       } else {
         document.getElementById('auth-screen').classList.remove('hidden');
       }
