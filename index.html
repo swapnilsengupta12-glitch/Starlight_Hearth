@@ -1035,15 +1035,22 @@
 
     function injectChatScenery() {
       const template = document.getElementById('chat-scenery-template');
+      const stage = document.getElementById('chat-active-container') || document.getElementById('chat-pane');
       const body = document.getElementById('chat-scenic-body');
-      if (!template || !body || body.querySelector('.chat-inner-scenery')) return;
+      if (!template || !stage || !body) return;
+
+      // Remove any old scenery inside the scrollable body so it doesn't cut off when scrolling
+      const oldInsideBody = body.querySelector('.chat-inner-scenery');
+      if (oldInsideBody) oldInsideBody.remove();
+
+      if (stage.querySelector('.chat-inner-scenery')) return;
 
       const clone = template.content.cloneNode(true);
       const starsGroup = clone.querySelector('.chat-stars-group');
       const firefliesLayer = clone.querySelector('.chat-fireflies-layer');
       populateStarsIntoGroup(starsGroup, 36, 1000, 700);
       populateFirefliesIntoLayer(firefliesLayer, 10);
-      body.prepend(clone);
+      stage.prepend(clone);
     }
 
     function initFantasyBackdrop() {
@@ -1325,25 +1332,38 @@
     function setupDataConnection(conn, expectedFriend = null) {
       const friendKey = normalizeUsername(expectedFriend || (conn.peer || '').replace(PEER_NAMESPACE, ''));
 
-      conn.on('open', () => {
-        if (friendKey && currentUser && friendKey !== currentUser.username) {
-          activeConnections.set(friendKey, conn);
-          friendPresence.set(friendKey, 'online');
-          clearFriendReconnect(friendKey);
-          if (!currentUser.friends.includes(friendKey)) {
-            currentUser.friends.unshift(friendKey);
+      const bindOpenHandlers = () => {
+        const resolvedKey = normalizeUsername(friendKey || (conn.peer || '').replace(PEER_NAMESPACE, ''));
+        if (resolvedKey && currentUser && resolvedKey !== currentUser.username) {
+          const prevConn = activeConnections.get(resolvedKey);
+          if (prevConn && prevConn !== conn) {
+            try { prevConn.close(); } catch {}
+          }
+          activeConnections.set(resolvedKey, conn);
+          friendPresence.set(resolvedKey, 'online');
+          clearFriendReconnect(resolvedKey);
+          if (!currentUser.friends.includes(resolvedKey)) {
+            currentUser.friends.unshift(resolvedKey);
             persistCurrentUserFriends();
           }
           renderInbox();
           updateActiveChatHeader();
         }
         if (currentUser) {
-          conn.send({ type: 'hello', from: currentUser.username, displayName: currentUser.displayName });
+          try {
+            conn.send({ type: 'hello', from: currentUser.username, displayName: currentUser.displayName });
+          } catch {}
         }
-        if (friendKey) {
-          flushOutboundQueue(friendKey);
+        if (resolvedKey) {
+          flushOutboundQueue(resolvedKey);
         }
-      });
+      };
+
+      if (conn.open) {
+        bindOpenHandlers();
+      } else {
+        conn.on('open', bindOpenHandlers);
+      }
 
       conn.on('data', (data) => {
         if (!data || typeof data !== 'object') return;
@@ -1351,7 +1371,8 @@
         if (!senderUser) return;
 
         if (senderUser && currentUser && senderUser !== currentUser.username) {
-          if (!activeConnections.has(senderUser) || !activeConnections.get(senderUser)?.open) {
+          const existing = activeConnections.get(senderUser);
+          if (!existing || existing !== conn || !existing.open) {
             activeConnections.set(senderUser, conn);
           }
           friendPresence.set(senderUser, 'online');
@@ -1369,7 +1390,7 @@
             friendPresence.set(friendKey, 'offline');
             renderInbox();
             updateActiveChatHeader();
-            scheduleFriendReconnect(friendKey, 3500);
+            scheduleFriendReconnect(friendKey, 2500);
           }
         }
       });
@@ -1377,11 +1398,12 @@
       conn.on('error', () => {
         if (friendKey) {
           const currentConn = activeConnections.get(friendKey);
-          if (!currentConn || !currentConn.open) {
+          if (!currentConn || currentConn === conn || !currentConn.open) {
+            activeConnections.delete(friendKey);
             friendPresence.set(friendKey, 'offline');
             renderInbox();
             updateActiveChatHeader();
-            scheduleFriendReconnect(friendKey, 3500);
+            scheduleFriendReconnect(friendKey, 2500);
           }
         }
       });
@@ -1427,11 +1449,24 @@
         }
         if (data.type === 'hello' && currentUser && senderUser !== currentUser.username) {
           const existing = activeConnections.get(senderUser);
-          if (!existing || !existing.open) {
+          if (existing && existing.open) {
+            try {
+              existing.send({ type: 'pong', to: senderUser, from: currentUser.username, displayName: currentUser.displayName });
+            } catch {}
+          } else {
             connectToFriendPeer(senderUser, { silentRetry: true });
           }
           flushOutboundQueue(senderUser);
         }
+        renderInbox();
+        updateActiveChatHeader();
+        return;
+      }
+
+      if (data.type === 'pong') {
+        friendPresence.set(senderUser, 'online');
+        clearFriendReconnect(senderUser);
+        flushOutboundQueue(senderUser);
         renderInbox();
         updateActiveChatHeader();
         return;
@@ -1447,6 +1482,7 @@
 
       if (data.type === 'chat') {
         friendPresence.set(senderUser, 'online');
+        clearFriendReconnect(senderUser);
 
         let roomId = senderUser;
         if (data.groupId) {
@@ -1468,975 +1504,21 @@
         renderInbox();
         updateActiveChatHeader();
 
-        if (selectedFriend !== roomId) {
+        if (!selectedFriend) {
           openChatWithFriend(roomId);
         }
 
-        hideFriendTypingIndicator();
-        appendIncomingMessageBubble({
-          sender: data.displayName || `@${senderUser}`,
-          text: data.text || '',
-          image: data.image || null,
-          replyTo: data.replyTo || null,
-          timestamp: new Date()
-        });
-      }
-    }
-
-    function updateMyNetworkUI(state, label) {
-      const dot = document.getElementById('my-network-dot');
-      const text = document.getElementById('my-network-status');
-      text.textContent = label;
-
-      if (state === 'online') {
-        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-night-900 shadow-[0_0_8px_#34d399]';
-      } else if (state === 'connecting') {
-        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-night-900 animate-pulse';
-      } else {
-        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-slate-500 border-2 border-night-900';
-      }
-    }
-
-    function persistCurrentUserFriends() {
-      if (!currentUser) return;
-      const accounts = loadStoredAccounts();
-      if (accounts[currentUser.username]) {
-        accounts[currentUser.username].friends = currentUser.friends;
-        accounts[currentUser.username].groups = currentGroups;
-        saveStoredAccounts(accounts);
-      }
-    }
-
-    function handleAddFriend(event) {
-      event.preventDefault();
-      const input = document.getElementById('add-friend-input');
-      const normFriend = normalizeUsername(input.value);
-
-      if (!normFriend) return;
-      if (normFriend === currentUser.username) {
-        showToast("That's your own username! Enter your friend's username.", 'error');
-        return;
-      }
-
-      if (!currentUser.friends.includes(normFriend)) {
-        currentUser.friends.unshift(normFriend);
-        persistCurrentUserFriends();
-      }
-
-      input.value = '';
-      renderInbox();
-      openChatWithFriend(normFriend);
-      connectToFriendPeer(normFriend);
-    }
-
-    function removeFriend(event, friendUser) {
-      event.stopPropagation();
-      currentUser.friends = currentUser.friends.filter(f => f !== friendUser);
-      persistCurrentUserFriends();
-      if (selectedFriend === friendUser) {
-        selectedFriend = null;
-        document.getElementById('chat-active-container').classList.add('hidden');
-        document.getElementById('chat-empty-state').classList.remove('hidden');
-      }
-      renderInbox();
-    }
-
-    function renderInbox() {
-      if (!currentUser) return;
-      const listEl = document.getElementById('inbox-list');
-
-      const groupList = Object.values(currentGroups);
-      const hasAnyItems = groupList.length > 0 || currentUser.friends.length > 0;
-
-      if (!hasAnyItems) {
-        listEl.innerHTML = `
-          <div class="text-center py-8 px-4 text-xs text-slate-400">
-            No companions in your inbox yet. Add your friend's username or create a group above!
-          </div>
-        `;
-        return;
-      }
-
-      const groupMarkup = groupList.map(grp => {
-        const isSelected = selectedFriend === grp.id;
-        const otherMembers = (grp.members || []).filter(m => m !== currentUser.username);
-        const onlineCount = otherMembers.filter(m => friendPresence.get(m) === 'online').length;
-        const subtitle = otherMembers.length
-          ? `${otherMembers.length + 1} members · ${onlineCount} online`
-          : 'Group chat';
-
-        return `
-          <div
-            onclick="openChatWithFriend('${grp.id}')"
-            class="group flex items-center justify-between gap-3 p-3 rounded-2xl cursor-pointer transition-all ${
-              isSelected
-                ? 'bg-amber-500/20 border border-amber-400/35 shadow-md'
-                : 'hover:bg-white/5 border border-transparent'
-            }"
-          >
-            <div class="flex items-center gap-3 min-w-0">
-              <div class="relative shrink-0">
-                <div class="w-10 h-10 rounded-full bg-indigo-500/25 text-amber-200 border border-amber-300/25 font-serif font-bold flex items-center justify-center text-sm">
-                  ${escapeHTML((grp.name || 'G').charAt(0).toUpperCase())}
-                </div>
-                <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ${onlineCount > 0 ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-amber-400/70'} border-2 border-night-900"></span>
-              </div>
-              <div class="min-w-0">
-                <div class="text-sm font-semibold text-amber-100 truncate flex items-center gap-1.5">
-                  <span class="truncate">${escapeHTML(grp.name)}</span>
-                  <span class="px-1.5 py-0.2 rounded bg-amber-400/15 text-[10px] text-amber-300 font-sans">Group</span>
-                </div>
-                <div class="text-[11px] text-slate-400 truncate">${escapeHTML(subtitle)}</div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onclick="leaveOrRemoveGroup(event, '${grp.id}')"
-              title="Leave group"
-              class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-rose-500/10 transition cursor-pointer"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-        `;
-      }).join('');
-
-      const friendsMarkup = currentUser.friends.map(friend => {
-        const isBot = friend === DEMO_BOT_USERNAME;
-        const status = isBot ? 'online' : (friendPresence.get(friend) || 'offline');
-        const isSelected = selectedFriend === friend;
-
-        let dotClass = 'bg-slate-500';
-        let statusLabel = 'Offline';
-        if (status === 'online') {
-          dotClass = 'bg-emerald-400 shadow-[0_0_8px_#34d399]';
-          statusLabel = isBot ? 'Typewriter Preview Bot · Online' : 'Online now';
-        } else if (status === 'connecting') {
-          dotClass = 'bg-amber-400 animate-pulse';
-          statusLabel = 'Searching village...';
-        }
-
-        const displayTitle = isBot ? 'Lantern Echo (Preview)' : `@${friend}`;
-
-        return `
-          <div
-            onclick="openChatWithFriend('${friend}')"
-            class="group flex items-center justify-between gap-3 p-3 rounded-2xl cursor-pointer transition-all ${
-              isSelected
-                ? 'bg-amber-500/20 border border-amber-400/35 shadow-md'
-                : 'hover:bg-white/5 border border-transparent'
-            }"
-          >
-            <div class="flex items-center gap-3 min-w-0">
-              <div class="relative shrink-0">
-                <div class="w-10 h-10 rounded-full ${isBot ? 'bg-indigo-500/30 text-amber-200' : 'bg-slate-800 text-slate-200'} border border-white/15 font-serif font-bold flex items-center justify-center text-sm">
-                  ${friend.charAt(0).toUpperCase()}
-                </div>
-                <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ${dotClass} border-2 border-night-900"></span>
-              </div>
-              <div class="min-w-0">
-                <div class="text-sm font-semibold text-slate-100 truncate">${displayTitle}</div>
-                <div class="text-[11px] ${status === 'online' ? 'text-emerald-300/90' : 'text-slate-400'} truncate">${statusLabel}</div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onclick="removeFriend(event, '${friend}')"
-              title="Remove from inbox"
-              class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-rose-500/10 transition cursor-pointer"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-        `;
-      }).join('');
-
-      listEl.innerHTML = groupMarkup + friendsMarkup;
-    }
-
-    function leaveOrRemoveGroup(event, groupId) {
-      event.stopPropagation();
-      delete currentGroups[groupId];
-      persistCurrentUserFriends();
-      if (selectedFriend === groupId) {
-        selectedFriend = null;
-        clearReplyTarget();
-        document.getElementById('chat-active-container').classList.add('hidden');
-        document.getElementById('chat-empty-state').classList.remove('hidden');
-      }
-      renderInbox();
-    }
-
-    function openChatWithFriend(friendUsername) {
-      const switched = selectedFriend !== friendUsername;
-      selectedFriend = friendUsername;
-
-      const inboxPane = document.getElementById('inbox-pane');
-      const chatPane = document.getElementById('chat-pane');
-      if (window.innerWidth < 768) {
-        inboxPane.classList.add('hidden');
-        chatPane.classList.remove('hidden');
-        chatPane.classList.add('flex');
-      }
-
-      document.getElementById('chat-empty-state').classList.add('hidden');
-      document.getElementById('chat-active-container').classList.remove('hidden');
-
-      if (switched) {
-        clearReplyTarget();
-        document.getElementById('messages-feed').innerHTML = '';
-        hideFriendTypingIndicator();
-
-        if (isGroupChatId(friendUsername)) {
-          const grp = currentGroups[friendUsername];
-          (grp?.members || []).forEach(member => {
-            if (member !== currentUser?.username) connectToFriendPeer(member);
+        if (selectedFriend === roomId) {
+          hideFriendTypingIndicator();
+          appendIncomingMessageBubble({
+            sender: data.displayName || `@${senderUser}`,
+            text: data.text || '',
+            image: data.image || null,
+            replyTo: data.replyTo || null,
+            timestamp: new Date()
           });
-        } else if (friendUsername === DEMO_BOT_USERNAME) {
-          setTimeout(() => {
-            appendIncomingMessageBubble({
-              sender: 'Lantern Echo',
-              text: 'Welcome to Starlight Hearth! Hover or tap Reply on any whisper to quote it, or create a Group Chat for multiple friends.',
-              timestamp: new Date()
-            });
-          }, 250);
         } else {
-          connectToFriendPeer(friendUsername);
-        }
-      }
-
-      renderInbox();
-      updateActiveChatHeader();
-      document.getElementById('message-input').focus();
-    }
-
-    function backToInboxMobile() {
-      const inboxPane = document.getElementById('inbox-pane');
-      const chatPane = document.getElementById('chat-pane');
-      inboxPane.classList.remove('hidden');
-      chatPane.classList.add('hidden');
-      chatPane.classList.remove('flex');
-      selectedFriend = null;
-      clearReplyTarget();
-      renderInbox();
-    }
-
-    function updateActiveChatHeader() {
-      if (!selectedFriend) return;
-
-      if (isGroupChatId(selectedFriend)) {
-        const grp = currentGroups[selectedFriend] || { name: 'Lantern Group', members: [] };
-        const otherMembers = (grp.members || []).filter(m => m !== currentUser?.username);
-        const onlineCount = otherMembers.filter(m => friendPresence.get(m) === 'online').length;
-
-        document.getElementById('active-friend-avatar').textContent = (grp.name || 'G').charAt(0).toUpperCase();
-        document.getElementById('active-friend-name').textContent = grp.name;
-
-        const dot = document.getElementById('active-friend-dot');
-        const statusText = document.getElementById('active-friend-status');
-        dot.className = `absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ${onlineCount > 0 ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-amber-400'} border-2 border-night-900`;
-        statusText.textContent = `${otherMembers.length + 1} companions · ${onlineCount} online`;
-        statusText.className = 'text-xs text-amber-200/90 truncate';
-        return;
-      }
-
-      const isBot = selectedFriend === DEMO_BOT_USERNAME;
-      const status = isBot ? 'online' : (friendPresence.get(selectedFriend) || 'offline');
-
-      document.getElementById('active-friend-avatar').textContent = selectedFriend.charAt(0).toUpperCase();
-      document.getElementById('active-friend-name').textContent = isBot ? 'Lantern Echo (Preview)' : `@${selectedFriend}`;
-
-      const dot = document.getElementById('active-friend-dot');
-      const statusText = document.getElementById('active-friend-status');
-
-      if (status === 'online') {
-        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-night-900 shadow-[0_0_8px_#34d399]';
-        statusText.textContent = 'Online · Ready to whisper';
-        statusText.className = 'text-xs text-emerald-300 truncate';
-      } else if (status === 'connecting') {
-        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-amber-400 border-2 border-night-900 animate-pulse';
-        statusText.textContent = 'Searching the night village...';
-        statusText.className = 'text-xs text-amber-300 truncate';
-      } else {
-        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-slate-500 border-2 border-night-900';
-        statusText.textContent = 'Offline · Waiting for them to open the link';
-        statusText.className = 'text-xs text-slate-400 truncate';
-      }
-    }
-
-    function reconnectActiveFriend() {
-      if (!selectedFriend || selectedFriend === DEMO_BOT_USERNAME) return;
-      if (isGroupChatId(selectedFriend)) {
-        const grp = currentGroups[selectedFriend];
-        (grp?.members || []).forEach(member => {
-          if (member !== currentUser?.username) connectToFriendPeer(member);
-        });
-        showToast(`Pinging ${grp?.name || 'group'} members...`, 'info');
-        return;
-      }
-      showToast(`Pinging @${selectedFriend}...`, 'info');
-      connectToFriendPeer(selectedFriend);
-    }
-
-    function clearCurrentRoomView() {
-      document.getElementById('messages-feed').innerHTML = '';
-      clearReplyTarget();
-      showToast('Screen cleared', 'info');
-    }
-
-    function clearReplyTarget() {
-      activeReplyTarget = null;
-      const bar = document.getElementById('reply-preview-bar');
-      if (bar) bar.classList.add('hidden');
-    }
-
-    function normalizeUsername(raw) {
-      return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-    }
-
-    function loadStoredAccounts() {
-      try {
-        const raw = localStorage.getItem(STORAGE_ACCOUNTS_KEY);
-        const parsed = raw ? JSON.parse(raw) : {};
-        return parsed && typeof parsed === 'object' ? parsed : {};
-      } catch {
-        return {};
-      }
-    }
-
-    function saveStoredAccounts(accounts) {
-      try {
-        localStorage.setItem(STORAGE_ACCOUNTS_KEY, JSON.stringify(accounts));
-      } catch {}
-    }
-
-    function getSavedSessionUsername() {
-      try {
-        return normalizeUsername(localStorage.getItem(STORAGE_SESSION_KEY) || '');
-      } catch {
-        return '';
-      }
-    }
-
-    function setSavedSessionUsername(username) {
-      try {
-        if (username) {
-          localStorage.setItem(STORAGE_SESSION_KEY, username);
-        } else {
-          localStorage.removeItem(STORAGE_SESSION_KEY);
-        }
-      } catch {}
-    }
-
-    function renderSavedAccountsChips() {
-      const box = document.getElementById('saved-accounts-box');
-      const list = document.getElementById('saved-accounts-list');
-      if (!box || !list) return;
-
-      const accounts = loadStoredAccounts();
-      const usernames = Object.keys(accounts);
-      if (usernames.length === 0) {
-        box.classList.add('hidden');
-        list.innerHTML = '';
-        return;
-      }
-
-      list.innerHTML = usernames.map((u) => {
-        const acct = accounts[u] || {};
-        const label = acct.displayName || `@${u}`;
-        return `
-          <button
-            type="button"
-            onclick="quickFillSavedAccount('${escapeHTML(u)}')"
-            class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-amber-500/20 border border-white/10 hover:border-amber-400/40 text-xs text-amber-100 transition cursor-pointer"
-          >
-            ${escapeHTML(label)}
-          </button>
-        `;
-      }).join('');
-      box.classList.remove('hidden');
-    }
-
-    function quickFillSavedAccount(username) {
-      const norm = normalizeUsername(username);
-      const userInput = document.getElementById('auth-username');
-      const passInput = document.getElementById('auth-password');
-      if (userInput) userInput.value = norm;
-      if (passInput) passInput.focus();
-    }
-
-    // Switch between Sign In and Create Account tabs on the auth screen
-    function switchAuthTab(mode) {
-      authMode = mode === 'signup' ? 'signup' : 'signin';
-      const signInBtn = document.getElementById('tab-signin');
-      const signUpBtn = document.getElementById('tab-signup');
-      const submitBtn = document.getElementById('auth-submit-btn');
-      const hintEl = document.getElementById('username-hint');
-
-      const activeClasses = ['bg-amber-500/20', 'text-amber-200', 'border', 'border-amber-400/30', 'shadow-sm'];
-      const inactiveClasses = ['text-slate-400', 'hover:text-slate-200'];
-
-      if (signInBtn && signUpBtn) {
-        if (authMode === 'signin') {
-          signInBtn.classList.add(...activeClasses);
-          signInBtn.classList.remove(...inactiveClasses);
-          signUpBtn.classList.remove(...activeClasses);
-          signUpBtn.classList.add(...inactiveClasses);
-        } else {
-          signUpBtn.classList.add(...activeClasses);
-          signUpBtn.classList.remove(...inactiveClasses);
-          signInBtn.classList.remove(...activeClasses);
-          signInBtn.classList.add(...inactiveClasses);
-        }
-      }
-
-      if (submitBtn) {
-        submitBtn.textContent = authMode === 'signup' ? 'Create & Enter Village' : 'Enter the Village';
-      }
-      if (hintEl) {
-        hintEl.classList.toggle('hidden', authMode !== 'signup');
-      }
-    }
-
-    // Handle Sign In and Create Account form submission
-    function handleAuthSubmit(event) {
-      event.preventDefault();
-      ensureAudioContext();
-
-      const userInput = document.getElementById('auth-username');
-      const passInput = document.getElementById('auth-password');
-      const normUsername = normalizeUsername(userInput?.value || '');
-      const password = passInput?.value || '';
-
-      if (!normUsername || normUsername.length < 2) {
-        showToast('Please enter a username (at least 2 letters/numbers/underscores).', 'error');
-        userInput?.focus();
-        return;
-      }
-      if (!password || password.length < 3) {
-        showToast('Please enter a password (at least 3 characters).', 'error');
-        passInput?.focus();
-        return;
-      }
-
-      const accounts = loadStoredAccounts();
-      const existing = accounts[normUsername];
-
-      if (authMode === 'signup') {
-        if (existing) {
-          showToast(`Username "${normUsername}" already exists. Switching to Sign In.`, 'info');
-          switchAuthTab('signin');
-          return;
-        }
-        accounts[normUsername] = {
-          username: normUsername,
-          displayName: `@${normUsername}`,
-          password,
-          friends: [DEMO_BOT_USERNAME],
-          groups: {}
-        };
-        saveStoredAccounts(accounts);
-        enterAppWithUser(accounts[normUsername]);
-        initPeerConnection(normUsername);
-        showToast(`Welcome to Starlight Hearth, @${normUsername}!`, 'success');
-      } else {
-        if (!existing) {
-          showToast(`No account found for "@${normUsername}". Create one first!`, 'error');
-          return;
-        }
-        if (existing.password !== password) {
-          showToast('Incorrect password for this account.', 'error');
-          passInput?.focus();
-          return;
-        }
-        enterAppWithUser(existing);
-        initPeerConnection(normUsername);
-        showToast(`Welcome back, @${normUsername}!`, 'success');
-      }
-    }
-
-    // Sign out of the current session while keeping saved accounts
-    function signOut() {
-      flushPersistenceBeforeUnload();
-      setSavedSessionUsername('');
-      selectedFriend = null;
-      currentUser = null;
-      currentGroups = {};
-      clearReplyTarget();
-      clearPendingImage();
-
-      if (peer) {
-        try {
-          peer.destroy();
-        } catch {}
-        peer = null;
-        peerReady = false;
-      }
-      activeConnections.clear();
-      friendPresence.clear();
-      pendingOutboundQueue.clear();
-      reconnectTimers.forEach((timer) => clearTimeout(timer));
-      reconnectTimers.clear();
-
-      const appScreen = document.getElementById('app-screen');
-      const authScreen = document.getElementById('auth-screen');
-      if (appScreen) appScreen.classList.add('hidden');
-      if (authScreen) authScreen.classList.remove('hidden');
-
-      renderSavedAccountsChips();
-      switchAuthTab('signin');
-      showToast('Signed out of Starlight Hearth', 'info');
-    }
-
-    // Initialize PeerJS connection for peer-to-peer chat
-    function initPeerConnection(username) {
-      if (!username || typeof Peer === 'undefined') {
-        enableLocalSandboxFallback();
-        return;
-      }
-
-      if (peer) {
-        try {
-          peer.destroy();
-        } catch {}
-        peer = null;
-        peerReady = false;
-      }
-
-      updateMyNetworkUI('connecting', 'Connecting P2P lantern...');
-
-      try {
-        const clientId = PEER_NAMESPACE + username;
-        peer = new Peer(clientId, {
-          debug: 0,
-          config: {
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' }
-            ]
-          }
-        });
-
-        peer.on('open', () => {
-          peerReady = true;
-          updateMyNetworkUI('online', `Online as @${username}`);
-          broadcastLocalBridge({ type: 'hello' });
-          if (currentUser) {
-            currentUser.friends.forEach((friend) => {
-              if (friend !== DEMO_BOT_USERNAME) connectToFriendPeer(friend, { silentRetry: true });
-            });
-            Object.values(currentGroups).forEach((grp) => {
-              (grp.members || []).forEach((member) => {
-                if (member !== currentUser.username && member !== DEMO_BOT_USERNAME) {
-                  connectToFriendPeer(member, { silentRetry: true });
-                }
-              });
-            });
-          }
-        });
-
-        peer.on('connection', (conn) => {
-          setupDataConnection(conn);
-        });
-
-        peer.on('error', (err) => {
-          if (err && err.type === 'unavailable-id') {
-            peerReady = false;
-            updateMyNetworkUI('offline', `Username @${username} open elsewhere`);
-            enableLocalSandboxFallback();
-            return;
-          }
-          peerReady = false;
-          enableLocalSandboxFallback();
-        });
-
-        peer.on('disconnected', () => {
-          peerReady = false;
-          updateMyNetworkUI('connecting', 'Reconnecting...');
-          try {
-            if (peer && !peer.destroyed) peer.reconnect();
-          } catch {}
-        });
-      } catch {
-        enableLocalSandboxFallback();
-      }
-    }
-
-    // Play a soft mechanical keystroke or incoming letter tick via WebAudio
-    function playMechanicalKeySound(isIncoming = false) {
-      if (!audioState.sfxEnabled || audioState.sfxVolume <= 0) return;
-      ensureAudioContext();
-      if (!audioState.ctx) return;
-
-      try {
-        const now = audioState.ctx.currentTime;
-        const osc = audioState.ctx.createOscillator();
-        const gain = audioState.ctx.createGain();
-        osc.type = isIncoming ? 'triangle' : 'sine';
-        const baseFreq = isIncoming ? 540 + Math.random() * 140 : 210 + Math.random() * 65;
-        osc.frequency.setValueAtTime(baseFreq, now);
-        osc.frequency.exponentialRampToValueAtTime(75, now + 0.035);
-
-        const peak = Math.max(0.001, audioState.sfxVolume * (isIncoming ? 0.08 : 0.06));
-        gain.gain.setValueAtTime(peak, now);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
-
-        osc.connect(gain);
-        gain.connect(audioState.ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.045);
-      } catch {}
-    }
-
-    // Start gentle ambient hearth pulse when unlocked by user interaction
-    function startAmbientBGM() {
-      if (!audioState.bgmEnabled) return;
-      ensureAudioContext();
-
-      if (audioState.bgmTrack === 'custom' && audioState.customAudioEl) {
-        if (audioState.bgmInterval) {
-          clearInterval(audioState.bgmInterval);
-          audioState.bgmInterval = null;
-        }
-        if (audioState.bgmMasterGain && audioState.ctx) {
-          try {
-            audioState.bgmMasterGain.gain.setTargetAtTime(0.0001, audioState.ctx.currentTime, 0.15);
-          } catch {}
-        }
-        audioState.customAudioEl.volume = audioState.bgmVolume;
-        audioState.customAudioEl.play().then(() => {
-          audioState.bgmPlaying = true;
-          updateBGMStatusUI();
-        }).catch(() => {});
-        return;
-      }
-
-      if (audioState.customAudioEl) {
-        try {
-          audioState.customAudioEl.pause();
-        } catch {}
-      }
-
-      if (!audioState.ctx || !audioState.bgmMasterGain) return;
-
-      try {
-        if (audioState.ctx.state === 'suspended') {
-          audioState.ctx.resume().catch(() => {});
-        }
-        const now = audioState.ctx.currentTime;
-        const gainScale = audioState.bgmTrack === 'ember_campfire' ? 0.14 : 0.16;
-        audioState.bgmMasterGain.gain.setTargetAtTime(Math.max(0.002, audioState.bgmVolume * gainScale), now, 0.15);
-
-        if (audioState.bgmInterval) {
-          clearInterval(audioState.bgmInterval);
-          audioState.bgmInterval = null;
-        }
-
-        const scales = {
-          starlight_waltz: [261.63, 329.63, 392.0, 493.88, 392.0, 329.63],
-          boreal_lullaby: [220.0, 261.63, 329.63, 440.0, 329.63, 261.63],
-          ember_campfire: [174.61, 220.0, 261.63, 349.23, 261.63, 220.0]
-        };
-        let step = 0;
-        const playStepNote = () => {
-          if (!audioState.bgmEnabled || !audioState.bgmPlaying || !audioState.ctx) return;
-          if (audioState.ctx.state === 'suspended') {
-            audioState.ctx.resume().catch(() => {});
-          }
-          const notes = scales[audioState.bgmTrack] || scales.starlight_waltz;
-          const freq = notes[step % notes.length];
-          step++;
-
-          try {
-            const t = audioState.ctx.currentTime;
-            const osc = audioState.ctx.createOscillator();
-            const noteGain = audioState.ctx.createGain();
-            osc.type = audioState.bgmTrack === 'boreal_lullaby' ? 'sine' : (audioState.bgmTrack === 'ember_campfire' ? 'sawtooth' : 'triangle');
-            osc.frequency.setValueAtTime(freq, t);
-            noteGain.gain.setValueAtTime(0.0001, t);
-            noteGain.gain.linearRampToValueAtTime(0.08, t + 0.06);
-            noteGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
-            osc.connect(noteGain);
-            noteGain.connect(audioState.bgmMasterGain);
-            osc.start(t);
-            osc.stop(t + 1.0);
-          } catch {}
-        };
-
-        audioState.bgmPlaying = true;
-        playStepNote();
-        audioState.bgmInterval = setInterval(playStepNote, 950);
-        updateBGMStatusUI();
-      } catch {}
-    }
-
-    function stopAmbientBGM() {
-      audioState.bgmPlaying = false;
-      if (audioState.bgmInterval) {
-        clearInterval(audioState.bgmInterval);
-        audioState.bgmInterval = null;
-      }
-      if (audioState.customAudioEl) {
-        try {
-          audioState.customAudioEl.pause();
-        } catch {}
-      }
-      if (audioState.bgmMasterGain && audioState.ctx) {
-        try {
-          audioState.bgmMasterGain.gain.setTargetAtTime(0.0001, audioState.ctx.currentTime, 0.15);
-        } catch {}
-      }
-      updateBGMStatusUI();
-    }
-
-    function toggleBGMSetting(enabled) {
-      audioState.bgmEnabled = Boolean(enabled);
-      ensureAudioContext();
-      if (audioState.bgmEnabled) {
-        startAmbientBGM();
-      } else {
-        stopAmbientBGM();
-      }
-    }
-
-    function selectBGMTrack(trackId) {
-      audioState.bgmTrack = trackId || 'starlight_waltz';
-      ensureAudioContext();
-      if (trackId === 'custom' && !audioState.customAudioEl) {
-        updateBGMStatusUI();
-        document.getElementById('custom-bgm-input')?.click();
-        return;
-      }
-      if (!audioState.bgmEnabled) {
-        audioState.bgmEnabled = true;
-        const toggleEl = document.getElementById('toggle-bgm');
-        if (toggleEl) toggleEl.checked = true;
-      }
-      stopAmbientBGM();
-      startAmbientBGM();
-      updateBGMStatusUI();
-    }
-
-    function handleCustomBGMUpload(event) {
-      const file = event.target.files?.[0];
-      if (!file) return;
-
-      const objectUrl = URL.createObjectURL(file);
-      if (audioState.customAudioEl) {
-        try {
-          audioState.customAudioEl.pause();
-        } catch {}
-      }
-      const audioEl = new Audio(objectUrl);
-      audioEl.loop = true;
-      audioEl.volume = audioState.bgmVolume;
-      audioState.customAudioEl = audioEl;
-      audioState.customTrackName = file.name;
-      audioState.bgmTrack = 'custom';
-
-      const selectEl = document.getElementById('bgm-track-select');
-      if (selectEl) selectEl.value = 'custom';
-
-      if (audioState.bgmEnabled) {
-        startAmbientBGM();
-      }
-      updateBGMStatusUI();
-      showToast(`Loaded theme song: ${file.name}`, 'success');
-      event.target.value = '';
-    }
-
-    function togglePlayPauseBGM() {
-      ensureAudioContext();
-      if (!audioState.bgmEnabled) {
-        audioState.bgmEnabled = true;
-        const toggleEl = document.getElementById('toggle-bgm');
-        if (toggleEl) toggleEl.checked = true;
-      }
-      if (audioState.bgmPlaying) {
-        stopAmbientBGM();
-      } else {
-        startAmbientBGM();
-      }
-    }
-
-    function updateBGMVolume(val) {
-      const pct = Math.max(0, Math.min(100, Number(val) || 0));
-      audioState.bgmVolume = pct / 100;
-      const label = document.getElementById('bgm-vol-label');
-      if (label) label.textContent = `${pct}%`;
-      if (audioState.customAudioEl) {
-        audioState.customAudioEl.volume = audioState.bgmVolume;
-      }
-      if (audioState.bgmPlaying && audioState.bgmMasterGain && audioState.ctx && audioState.bgmTrack !== 'custom') {
-        const gainScale = audioState.bgmTrack === 'ember_campfire' ? 0.14 : 0.16;
-        audioState.bgmMasterGain.gain.setTargetAtTime(Math.max(0.002, audioState.bgmVolume * gainScale), audioState.ctx.currentTime, 0.12);
-      }
-    }
-
-    function updateBGMStatusUI() {
-      const statusEl = document.getElementById('bgm-status-label');
-      const btnEl = document.getElementById('bgm-play-toggle-btn');
-      if (!statusEl) return;
-
-      const names = {
-        starlight_waltz: 'Starlight Waltz',
-        boreal_lullaby: 'Boreal Lullaby',
-        ember_campfire: 'Ember Campfire',
-        custom: audioState.customTrackName || 'Custom Theme Song'
-      };
-      const trackLabel = names[audioState.bgmTrack] || 'Starlight Waltz';
-      const stateLabel = !audioState.bgmEnabled ? 'Muted' : (audioState.bgmPlaying ? 'Playing' : 'Ready');
-      statusEl.textContent = `${trackLabel} · ${stateLabel}`;
-      if (btnEl) btnEl.textContent = audioState.bgmPlaying ? 'Pause Song' : 'Play Song';
-    }
-
-    function toggleSFXSetting(enabled) {
-      audioState.sfxEnabled = Boolean(enabled);
-      if (audioState.sfxEnabled) playMechanicalKeySound(true);
-    }
-
-    function updateSFXVolume(val) {
-      const pct = Math.max(0, Math.min(100, Number(val) || 0));
-      audioState.sfxVolume = pct / 100;
-      const label = document.getElementById('sfx-vol-label');
-      if (label) label.textContent = `${pct}%`;
-    }
-
-    function enterAppWithUser(userRecord) {
-      if (!userRecord || !userRecord.username) return;
-      const normUser = normalizeUsername(userRecord.username);
-      const friendsList = Array.isArray(userRecord.friends) && userRecord.friends.length > 0
-        ? Array.from(new Set(userRecord.friends.map(normalizeUsername).filter(Boolean)))
-        : [DEMO_BOT_USERNAME];
-
-      currentUser = {
-        username: normUser,
-        displayName: userRecord.displayName || `@${normUser}`,
-        friends: friendsList
-      };
-      currentGroups = (userRecord.groups && typeof userRecord.groups === 'object')
-        ? { ...userRecord.groups }
-        : {};
-
-      setSavedSessionUsername(normUser);
-      initLocalTabBridge();
-
-      const authScreen = document.getElementById('auth-screen');
-      const appScreen = document.getElementById('app-screen');
-      if (authScreen) authScreen.classList.add('hidden');
-      if (appScreen) appScreen.classList.remove('hidden');
-
-      const avatarEl = document.getElementById('my-avatar');
-      const nameEl = document.getElementById('my-display-name');
-      if (avatarEl) avatarEl.textContent = normUser.charAt(0).toUpperCase();
-      if (nameEl) nameEl.textContent = currentUser.displayName;
-
-      renderInbox();
-      if (currentUser.friends.length > 0 && !selectedFriend) {
-        openChatWithFriend(currentUser.friends[0]);
-      } else {
-        updateActiveChatHeader();
-      }
-    }
-
-    function enableLocalSandboxFallback() {
-      localBridgeActive = true;
-      initLocalTabBridge();
-      if (currentUser) {
-        updateMyNetworkUI('online', `Local Tab Link (@${currentUser.username})`);
-        broadcastLocalBridge({ type: 'hello' });
-        currentUser.friends.forEach((friend) => {
-          if (friend !== DEMO_BOT_USERNAME) {
-            broadcastLocalBridge({ type: 'hello', to: friend });
-          }
-        });
-      }
-    }
-
-    function flushPersistenceBeforeUnload() {
-      if (!currentUser) return;
-      persistCurrentUserFriends();
-      setSavedSessionUsername(currentUser.username);
-    }
-
-    function setReplyToMessage(msgId) {
-      const record = messageRegistry.get(msgId);
-      if (!record) return;
-      activeReplyTarget = {
-        id: msgId,
-        sender: record.sender,
-        text: record.text || (record.image ? '[Photo]' : '')
-      };
-      document.getElementById('reply-preview-author').textContent = `Replying & tagging ${activeReplyTarget.sender}`;
-      document.getElementById('reply-preview-text').textContent = activeReplyTarget.text || 'Whisper';
-      document.getElementById('reply-preview-bar').classList.remove('hidden');
-
-      const input = document.getElementById('message-input');
-      if (input) {
-        const cleanTag = activeReplyTarget.sender.startsWith('@')
-          ? activeReplyTarget.sender
-          : `@${activeReplyTarget.sender.toLowerCase().replace(/[^a-z0-9_]/g, '')}`;
-        if (cleanTag && cleanTag !== '@' && !input.value.includes(cleanTag)) {
-          input.value = input.value.trim() ? `${cleanTag} ${input.value}` : `${cleanTag} `;
-        }
-        input.focus();
-      }
-    }
-
-    function copyMyUsername() {
-      if (!currentUser) return;
-      const tempInput = document.createElement('input');
-      tempInput.value = currentUser.username;
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      document.execCommand('copy');
-      document.body.removeChild(tempInput);
-      showToast(`Copied "${currentUser.username}" — send it to your friend!`, 'success');
-    }
-
-    function handleComposerKeydown(event) {
-      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
-        playMechanicalKeySound(false);
-      }
-
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        handleSendMessage(event);
-      }
-    }
-
-    function handleComposerInput(event) {
-      const textarea = event.target;
-      textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 128) + 'px';
-
-      if (selectedFriend && selectedFriend !== DEMO_BOT_USERNAME) {
-        const now = Date.now();
-        if (now - lastTypingSentTime > 1500) {
-          lastTypingSentTime = now;
-          if (isGroupChatId(selectedFriend)) {
-            const grp = currentGroups[selectedFriend];
-            (grp?.members || []).forEach(member => {
-              if (member !== currentUser.username) {
-                sendDirectPayloadToMember(member, {
-                  type: 'typing',
-                  groupId: selectedFriend,
-                  from: currentUser.username,
-                  displayName: currentUser.displayName
-                });
-              }
-            });
-          } else if (localBridgeActive) {
-            broadcastLocalBridge({ type: 'typing', to: selectedFriend, from: currentUser.username, displayName: currentUser.displayName });
-          } else {
-            const conn = activeConnections.get(selectedFriend);
-            if (conn && conn.open) {
-              conn.send({ type: 'typing', from: currentUser.username, displayName: currentUser.displayName });
-            }
-          }
+          showToast(`New message from ${data.displayName || '@' + senderUser}`, 'info');
         }
       }
     }
@@ -2579,18 +1661,31 @@
 
       const conn = activeConnections.get(selectedFriend);
       if (conn && conn.open) {
-        conn.send({
-          type: 'chat',
-          from: currentUser.username,
-          displayName: currentUser.displayName,
-          text,
-          image,
-          replyTo
-        });
-      } else {
-        showToast(`@${selectedFriend} is currently offline—attempting to reconnect...`, 'error');
-        connectToFriendPeer(selectedFriend);
+        try {
+          conn.send({
+            type: 'chat',
+            from: currentUser.username,
+            displayName: currentUser.displayName,
+            text,
+            image,
+            replyTo
+          });
+          return;
+        } catch {
+          activeConnections.delete(selectedFriend);
+        }
       }
+
+      enqueueOutboundPacket(selectedFriend, {
+        type: 'chat',
+        from: currentUser.username,
+        displayName: currentUser.displayName,
+        text,
+        image,
+        replyTo
+      });
+      showToast(`Reconnecting to @${selectedFriend}—will send right away...`, 'info');
+      connectToFriendPeer(selectedFriend);
     }
 
     function formatTime(date) {
@@ -2785,6 +1880,953 @@
         toast.style.transform = 'translateY(-6px)';
         setTimeout(() => toast.remove(), 300);
       }, 3000);
+    }
+
+    function normalizeUsername(raw) {
+      return String(raw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '');
+    }
+
+    function loadStoredAccounts() {
+      try {
+        const raw = localStorage.getItem(STORAGE_ACCOUNTS_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function saveStoredAccounts(accounts) {
+      try {
+        localStorage.setItem(STORAGE_ACCOUNTS_KEY, JSON.stringify(accounts || {}));
+      } catch {}
+    }
+
+    function getSavedSessionUsername() {
+      try {
+        return normalizeUsername(localStorage.getItem(STORAGE_SESSION_KEY) || '');
+      } catch {
+        return '';
+      }
+    }
+
+    function setSavedSessionUsername(username) {
+      try {
+        if (username) {
+          localStorage.setItem(STORAGE_SESSION_KEY, normalizeUsername(username));
+        } else {
+          localStorage.removeItem(STORAGE_SESSION_KEY);
+        }
+      } catch {}
+    }
+
+    function persistCurrentUserFriends() {
+      if (!currentUser || !currentUser.username) return;
+      const username = normalizeUsername(currentUser.username);
+      currentUser.friends = Array.from(new Set((currentUser.friends || []).map(normalizeUsername).filter(Boolean)));
+      currentUser.groups = currentGroups || {};
+
+      const accounts = loadStoredAccounts();
+      accounts[username] = {
+        ...(accounts[username] || {}),
+        username,
+        displayName: currentUser.displayName || `@${username}`,
+        password: currentUser.password || accounts[username]?.password || '',
+        friends: currentUser.friends,
+        groups: currentGroups || {}
+      };
+      saveStoredAccounts(accounts);
+      setSavedSessionUsername(username);
+    }
+
+    function flushPersistenceBeforeUnload() {
+      try {
+        if (currentUser && currentUser.username) {
+          persistCurrentUserFriends();
+        }
+      } catch {}
+    }
+
+    function enableLocalSandboxFallback() {
+      if (localBridgeActive) return;
+      localBridgeActive = true;
+      peerReady = false;
+      initLocalTabBridge();
+
+      const dot = document.getElementById('my-network-dot');
+      const status = document.getElementById('my-network-status');
+      if (dot) {
+        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-night-900';
+      }
+      if (status && currentUser) {
+        status.textContent = `Local Tab Mode · @${currentUser.username}`;
+      }
+
+      if (currentUser) {
+        broadcastLocalBridge({
+          type: 'hello',
+          from: currentUser.username,
+          displayName: currentUser.displayName
+        });
+      }
+      renderInbox();
+      updateActiveChatHeader();
+    }
+
+    function enterAppWithUser(account) {
+      const username = normalizeUsername(account?.username || '');
+      if (!username) return;
+
+      currentUser = {
+        username,
+        displayName: account.displayName || `@${username}`,
+        password: account.password || '',
+        friends: Array.from(new Set((account.friends || [DEMO_BOT_USERNAME]).map(normalizeUsername).filter(Boolean))),
+        groups: account.groups && typeof account.groups === 'object' ? account.groups : {}
+      };
+      if (!currentUser.friends.includes(DEMO_BOT_USERNAME)) {
+        currentUser.friends.push(DEMO_BOT_USERNAME);
+      }
+      currentGroups = { ...currentUser.groups };
+      persistCurrentUserFriends();
+      setSavedSessionUsername(username);
+
+      const avatar = document.getElementById('my-avatar');
+      const displayNameEl = document.getElementById('my-display-name');
+      if (avatar) avatar.textContent = username.charAt(0).toUpperCase();
+      if (displayNameEl) displayNameEl.textContent = `@${username}`;
+
+      const authScreen = document.getElementById('auth-screen');
+      const appScreen = document.getElementById('app-screen');
+      if (authScreen) authScreen.classList.add('hidden');
+      if (appScreen) appScreen.classList.remove('hidden');
+
+      initFantasyBackdrop();
+      renderInbox();
+    }
+
+    function renderSavedAccountsChips() {
+      const box = document.getElementById('saved-accounts-box');
+      const list = document.getElementById('saved-accounts-list');
+      if (!box || !list) return;
+
+      const accounts = loadStoredAccounts();
+      const usernames = Object.keys(accounts).filter(Boolean);
+
+      if (usernames.length === 0) {
+        box.classList.add('hidden');
+        list.innerHTML = '';
+        return;
+      }
+
+      box.classList.remove('hidden');
+      list.innerHTML = usernames.map((uname) => {
+        const safeUser = escapeHTML(uname);
+        return `
+          <button
+            type="button"
+            onclick="quickFillSavedAccount('${safeUser}')"
+            class="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-xs font-medium text-amber-200 transition cursor-pointer"
+          >
+            @${safeUser}
+          </button>
+        `;
+      }).join('');
+    }
+
+    function quickFillSavedAccount(username) {
+      const normalized = normalizeUsername(username);
+      const accounts = loadStoredAccounts();
+      const acct = accounts[normalized];
+      const userInput = document.getElementById('auth-username');
+      const passInput = document.getElementById('auth-password');
+
+      switchAuthTab('signin');
+      if (userInput) userInput.value = normalized;
+      if (passInput && acct && acct.password) {
+        passInput.value = acct.password;
+      }
+      if (passInput) passInput.focus();
+    }
+
+    // Switch between Sign In and Create Account tabs on the auth screen
+    function switchAuthTab(mode) {
+      authMode = mode === 'signup' ? 'signup' : 'signin';
+
+      const tabSignin = document.getElementById('tab-signin');
+      const tabSignup = document.getElementById('tab-signup');
+      const usernameHint = document.getElementById('username-hint');
+      const submitBtn = document.getElementById('auth-submit-btn');
+
+      const activeClasses = ['bg-amber-500/20', 'text-amber-200', 'border', 'border-amber-400/30', 'shadow-sm'];
+      const inactiveClasses = ['text-slate-400', 'hover:text-slate-200'];
+
+      if (tabSignin && tabSignup) {
+        if (authMode === 'signin') {
+          tabSignin.classList.add(...activeClasses);
+          tabSignin.classList.remove(...inactiveClasses);
+          tabSignup.classList.remove(...activeClasses);
+          tabSignup.classList.add(...inactiveClasses);
+        } else {
+          tabSignup.classList.add(...activeClasses);
+          tabSignup.classList.remove(...inactiveClasses);
+          tabSignin.classList.remove(...activeClasses);
+          tabSignin.classList.add(...inactiveClasses);
+        }
+      }
+
+      if (usernameHint) {
+        usernameHint.classList.toggle('hidden', authMode !== 'signup');
+      }
+
+      if (submitBtn) {
+        submitBtn.textContent = authMode === 'signup' ? 'Create Lantern Account' : 'Enter the Village';
+      }
+    }
+
+    // Handle Sign In and Create Account form submission
+    function handleAuthSubmit(event) {
+      event.preventDefault();
+      ensureAudioContext();
+
+      const userInput = document.getElementById('auth-username');
+      const passInput = document.getElementById('auth-password');
+      const rawUsername = userInput ? userInput.value : '';
+      const password = passInput ? passInput.value : '';
+      const username = normalizeUsername(rawUsername);
+
+      if (!username || username.length < 2) {
+        showToast('Please enter a username with at least 2 letters, numbers, or underscores.', 'error');
+        return;
+      }
+
+      if (!password || password.length < 4) {
+        showToast('Please enter a password of at least 4 characters.', 'error');
+        return;
+      }
+
+      const accounts = loadStoredAccounts();
+      const existing = accounts[username];
+
+      if (authMode === 'signup') {
+        if (existing) {
+          showToast(`@${username} already exists. Switch to Sign In instead.`, 'error');
+          return;
+        }
+        const newAccount = {
+          username,
+          displayName: `@${username}`,
+          password,
+          friends: [DEMO_BOT_USERNAME],
+          groups: {}
+        };
+        accounts[username] = newAccount;
+        saveStoredAccounts(accounts);
+        renderSavedAccountsChips();
+        enterAppWithUser(newAccount);
+        initPeerConnection(username);
+        showToast(`Welcome to Starlight Hearth, @${username}!`, 'success');
+      } else {
+        if (!existing) {
+          showToast(`No account found for @${username}. Switch to Create Account to register.`, 'error');
+          return;
+        }
+        if (existing.password !== password) {
+          showToast('Incorrect password for this account.', 'error');
+          return;
+        }
+        enterAppWithUser(existing);
+        initPeerConnection(username);
+        showToast(`Welcome back, @${username}!`, 'success');
+      }
+    }
+
+    // Sign out of the active session while keeping the account saved on the device
+    function signOut() {
+      flushPersistenceBeforeUnload();
+
+      reconnectTimers.forEach((timerId) => clearTimeout(timerId));
+      reconnectTimers.clear();
+      pendingOutboundQueue.clear();
+
+      activeConnections.forEach((conn) => {
+        try { conn.close(); } catch {}
+      });
+      activeConnections.clear();
+      friendPresence.clear();
+
+      if (peer) {
+        try { peer.destroy(); } catch {}
+        peer = null;
+      }
+      peerReady = false;
+      currentUser = null;
+      selectedFriend = null;
+      currentGroups = {};
+      activeReplyTarget = null;
+      clearPendingImage();
+
+      setSavedSessionUsername('');
+
+      const appScreen = document.getElementById('app-screen');
+      const authScreen = document.getElementById('auth-screen');
+      if (appScreen) appScreen.classList.add('hidden');
+      if (authScreen) authScreen.classList.remove('hidden');
+
+      renderSavedAccountsChips();
+      switchAuthTab('signin');
+      showToast('Signed out. Your account remains saved on this device.', 'info');
+    }
+
+    // Initialize PeerJS connection for live P2P messaging
+    function initPeerConnection(username) {
+      const normalized = normalizeUsername(username);
+      if (!normalized) return;
+
+      const dot = document.getElementById('my-network-dot');
+      const status = document.getElementById('my-network-status');
+
+      if (typeof Peer === 'undefined') {
+        enableLocalSandboxFallback();
+        return;
+      }
+
+      if (peer) {
+        try { peer.destroy(); } catch {}
+        peer = null;
+      }
+      peerReady = false;
+
+      if (dot) {
+        dot.className = 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-night-900 animate-pulse';
+      }
+      if (status) {
+        status.textContent = 'Lighting lantern...';
+      }
+
+      try {
+        peer = new Peer(PEER_NAMESPACE + normalized, {
+          debug: 0,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+          }
+        });
+
+        peer.on('open', () => {
+          peerReady = true;
+          localBridgeActive = false;
+          if (dot) {
+            dot.className = 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-night-900';
+          }
+          if (status) {
+            status.textContent = `Online · @${normalized}`;
+          }
+
+          if (currentUser && Array.isArray(currentUser.friends)) {
+            currentUser.friends.forEach((friend) => {
+              if (friend && friend !== DEMO_BOT_USERNAME && friend !== normalized) {
+                connectToFriendPeer(friend, { silentRetry: true });
+              }
+            });
+          }
+        });
+
+        peer.on('connection', (conn) => {
+          const remotePeerId = (conn.peer || '').replace(PEER_NAMESPACE, '');
+          setupDataConnection(conn, remotePeerId);
+        });
+
+        peer.on('disconnected', () => {
+          peerReady = false;
+          if (status && currentUser) {
+            status.textContent = 'Reconnecting lantern...';
+          }
+          if (peer && !peer.destroyed) {
+            try { peer.reconnect(); } catch {}
+          }
+        });
+
+        peer.on('error', (err) => {
+          const errType = err?.type || '';
+          if (errType === 'unavailable-id') {
+            enableLocalSandboxFallback(err);
+            return;
+          }
+          if (errType === 'browser-incompatible' || errType === 'network') {
+            enableLocalSandboxFallback(err);
+            return;
+          }
+          if (status && currentUser) {
+            status.textContent = peerReady ? `Online · @${normalized}` : 'Searching for peers...';
+          }
+        });
+      } catch (err) {
+        enableLocalSandboxFallback(err);
+      }
+    }
+
+    // Copy current username to clipboard
+    function copyMyUsername() {
+      if (!currentUser) return;
+      const text = currentUser.username;
+      let copied = false;
+      try {
+        const tempInput = document.createElement('input');
+        tempInput.value = text;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(tempInput);
+      } catch {}
+
+      if (copied) {
+        showToast(`Copied username "@${text}"`, 'success');
+      } else {
+        showToast(`Your username is @${text}`, 'info');
+      }
+    }
+
+    // Render friends and group chats in the inbox sidebar
+    function renderInbox() {
+      const listEl = document.getElementById('inbox-list');
+      if (!listEl || !currentUser) return;
+
+      const items = [];
+
+      Object.values(currentGroups || {}).forEach((grp) => {
+        if (!grp || !grp.id) return;
+        const memberCount = Array.isArray(grp.members) ? grp.members.length : 1;
+        items.push({
+          id: grp.id,
+          name: grp.name || 'Lantern Group',
+          subtext: `${memberCount} members`,
+          badgeText: 'G',
+          isOnline: true,
+          isGroup: true
+        });
+      });
+
+      const uniqueFriends = Array.from(new Set(currentUser.friends || []));
+      uniqueFriends.forEach((friend) => {
+        if (!friend || friend === currentUser.username) return;
+        const isBot = friend === DEMO_BOT_USERNAME;
+        const presence = isBot ? 'online' : (friendPresence.get(friend) || 'offline');
+        items.push({
+          id: friend,
+          name: isBot ? 'Lantern Echo (Bot)' : `@${friend}`,
+          subtext: isBot ? 'Always awake' : (presence === 'online' ? 'Online' : (presence === 'connecting' ? 'Connecting...' : 'Offline')),
+          badgeText: isBot ? '✦' : friend.charAt(0).toUpperCase(),
+          isOnline: isBot || presence === 'online',
+          isGroup: false
+        });
+      });
+
+      if (items.length === 0) {
+        listEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-6 px-3">No companions yet. Add a friend above to start chatting.</p>`;
+        return;
+      }
+
+      listEl.innerHTML = items.map((item) => {
+        const isSelected = selectedFriend === item.id;
+        const activeClasses = isSelected
+          ? 'bg-amber-500/20 border-amber-400/45 text-amber-100'
+          : 'bg-white/[0.03] hover:bg-white/[0.07] border-transparent text-slate-200';
+        const dotClass = item.isOnline ? 'bg-emerald-400' : 'bg-slate-500';
+        const statusColor = item.isOnline ? 'text-emerald-300/90' : 'text-slate-400';
+
+        return `
+          <button
+            type="button"
+            onclick="openChatWithFriend('${escapeHTML(item.id)}')"
+            class="w-full flex items-center gap-3 p-2.5 rounded-2xl border text-left transition cursor-pointer ${activeClasses}"
+          >
+            <div class="relative shrink-0">
+              <div class="w-10 h-10 rounded-full bg-night-800 border border-amber-400/25 text-amber-200 font-serif font-bold text-sm flex items-center justify-center">
+                ${escapeHTML(item.badgeText)}
+              </div>
+              <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ${dotClass} border-2 border-night-950"></span>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="font-semibold text-xs sm:text-sm truncate">${escapeHTML(item.name)}</div>
+              <div class="text-[11px] truncate ${statusColor}">${escapeHTML(item.subtext)}</div>
+            </div>
+          </button>
+        `;
+      }).join('');
+    }
+
+    // Add a friend username to the current user's list
+    function handleAddFriend(event) {
+      event.preventDefault();
+      if (!currentUser) return;
+
+      const input = document.getElementById('add-friend-input');
+      const friend = normalizeUsername(input ? input.value : '');
+      if (!friend) {
+        showToast('Enter a valid friend username.', 'error');
+        return;
+      }
+      if (friend === currentUser.username) {
+        showToast('You cannot add yourself as a friend.', 'error');
+        return;
+      }
+
+      if (!currentUser.friends.includes(friend)) {
+        currentUser.friends.unshift(friend);
+        persistCurrentUserFriends();
+      }
+
+      if (input) input.value = '';
+      renderInbox();
+      openChatWithFriend(friend);
+      if (friend !== DEMO_BOT_USERNAME) {
+        connectToFriendPeer(friend);
+      }
+      showToast(`Added @${friend}`, 'success');
+    }
+
+    // Open a 1-on-1 or group chat room
+    function openChatWithFriend(roomId) {
+      if (!roomId || !currentUser) return;
+      const previousRoom = selectedFriend;
+      selectedFriend = roomId;
+
+      const emptyState = document.getElementById('chat-empty-state');
+      const activeContainer = document.getElementById('chat-active-container');
+      const inboxPane = document.getElementById('inbox-pane');
+      const chatPane = document.getElementById('chat-pane');
+
+      if (emptyState) emptyState.classList.add('hidden');
+      if (activeContainer) activeContainer.classList.remove('hidden');
+
+      if (window.innerWidth < 768) {
+        if (inboxPane) inboxPane.classList.add('hidden');
+        if (chatPane) {
+          chatPane.classList.remove('hidden');
+          chatPane.classList.add('flex');
+        }
+      }
+
+      if (previousRoom !== roomId) {
+        const feed = document.getElementById('messages-feed');
+        if (feed) feed.innerHTML = '';
+        messageRegistry.clear();
+        clearReplyTarget();
+        hideFriendTypingIndicator();
+      }
+
+      injectChatScenery();
+      updateActiveChatHeader();
+      renderInbox();
+
+      if (!isGroupChatId(roomId) && roomId !== DEMO_BOT_USERNAME) {
+        connectToFriendPeer(roomId, { silentRetry: true });
+      }
+    }
+
+    // Update header info for the active friend or group chat
+    function updateActiveChatHeader() {
+      const avatarEl = document.getElementById('active-friend-avatar');
+      const dotEl = document.getElementById('active-friend-dot');
+      const nameEl = document.getElementById('active-friend-name');
+      const statusEl = document.getElementById('active-friend-status');
+      if (!selectedFriend || !nameEl || !statusEl) return;
+
+      if (isGroupChatId(selectedFriend)) {
+        const grp = currentGroups[selectedFriend];
+        const grpName = grp?.name || 'Lantern Group';
+        const members = grp?.members || [];
+        if (avatarEl) avatarEl.textContent = 'G';
+        if (dotEl) dotEl.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-night-900';
+        nameEl.textContent = grpName;
+        statusEl.textContent = members.length > 0 ? members.map((m) => `@${m}`).join(', ') : 'Group Chat';
+        return;
+      }
+
+      if (selectedFriend === DEMO_BOT_USERNAME) {
+        if (avatarEl) avatarEl.textContent = '✦';
+        if (dotEl) dotEl.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-night-900';
+        nameEl.textContent = 'Lantern Echo';
+        statusEl.textContent = 'Online · Sanctuary Bot';
+        return;
+      }
+
+      const presence = friendPresence.get(selectedFriend) || 'offline';
+      if (avatarEl) avatarEl.textContent = selectedFriend.charAt(0).toUpperCase();
+      nameEl.textContent = `@${selectedFriend}`;
+
+      if (presence === 'online') {
+        if (dotEl) dotEl.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-night-900';
+        statusEl.textContent = 'Online';
+      } else if (presence === 'connecting') {
+        if (dotEl) dotEl.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-amber-400 border-2 border-night-900 animate-pulse';
+        statusEl.textContent = 'Connecting...';
+      } else {
+        if (dotEl) dotEl.className = 'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-slate-500 border-2 border-night-900';
+        statusEl.textContent = 'Offline';
+      }
+    }
+
+    // Return from chat view to inbox on mobile screens
+    function backToInboxMobile() {
+      const inboxPane = document.getElementById('inbox-pane');
+      const chatPane = document.getElementById('chat-pane');
+      if (inboxPane) inboxPane.classList.remove('hidden');
+      if (chatPane) {
+        chatPane.classList.add('hidden');
+        chatPane.classList.remove('flex');
+      }
+    }
+
+    // Manually retry connecting to the currently open friend or group
+    function reconnectActiveFriend() {
+      if (!selectedFriend) return;
+      if (selectedFriend === DEMO_BOT_USERNAME) {
+        showToast('Lantern Echo is always ready.', 'info');
+        return;
+      }
+      if (isGroupChatId(selectedFriend)) {
+        const members = (currentGroups[selectedFriend]?.members || []).filter((m) => m !== currentUser?.username);
+        members.forEach((m) => connectToFriendPeer(m));
+        showToast('Reconnecting to group companions...', 'info');
+        return;
+      }
+      connectToFriendPeer(selectedFriend);
+      showToast(`Reconnecting to @${selectedFriend}...`, 'info');
+    }
+
+    // Clear ephemeral messages in the current chat view
+    function clearCurrentRoomView() {
+      const feed = document.getElementById('messages-feed');
+      if (feed) feed.innerHTML = '';
+      messageRegistry.clear();
+      clearReplyTarget();
+      showToast('Cleared messages on screen.', 'info');
+    }
+
+    // Set active reply target and pre-tag sender in composer
+    function setReplyToMessage(msgId) {
+      const target = messageRegistry.get(msgId);
+      if (!target) return;
+
+      activeReplyTarget = {
+        sender: target.sender || 'Companion',
+        text: target.text || (target.image ? '[Photo]' : '')
+      };
+
+      const bar = document.getElementById('reply-preview-bar');
+      const authorEl = document.getElementById('reply-preview-author');
+      const textEl = document.getElementById('reply-preview-text');
+      const input = document.getElementById('message-input');
+
+      if (bar && authorEl && textEl) {
+        authorEl.textContent = `Replying to ${activeReplyTarget.sender}`;
+        textEl.textContent = activeReplyTarget.text || '[Photo]';
+        bar.classList.remove('hidden');
+      }
+
+      if (input) {
+        const cleanHandle = String(activeReplyTarget.sender || '')
+          .replace(/^@/, '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, '_');
+        if (cleanHandle && cleanHandle !== 'you' && !input.value.includes(`@${cleanHandle}`)) {
+          const prefix = `@${cleanHandle} `;
+          input.value = input.value.trim().length > 0 ? `${prefix}${input.value}` : prefix;
+        }
+        input.focus();
+      }
+    }
+
+    function clearReplyTarget() {
+      activeReplyTarget = null;
+      const bar = document.getElementById('reply-preview-bar');
+      if (bar) bar.classList.add('hidden');
+    }
+
+    // Handle Enter vs Shift+Enter in message composer
+    function handleComposerKeydown(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        const form = event.target.closest('form');
+        if (form) {
+          form.requestSubmit();
+        }
+      }
+    }
+
+    // Auto-resize composer and emit typing indicator + key SFX
+    function handleComposerInput(event) {
+      const textarea = event.target;
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+
+      playMechanicalKeySound(false);
+
+      if (!selectedFriend || selectedFriend === DEMO_BOT_USERNAME || !currentUser) return;
+      const now = Date.now();
+      if (now - lastTypingSentTime < 1000) return;
+      lastTypingSentTime = now;
+
+      if (isGroupChatId(selectedFriend)) {
+        const members = (currentGroups[selectedFriend]?.members || []).filter((m) => m !== currentUser.username);
+        members.forEach((m) => {
+          sendDirectPayloadToMember(m, {
+            type: 'typing',
+            groupId: selectedFriend,
+            from: currentUser.username,
+            displayName: currentUser.displayName
+          });
+        });
+        return;
+      }
+
+      if (localBridgeActive) {
+        broadcastLocalBridge({
+          type: 'typing',
+          to: selectedFriend,
+          from: currentUser.username,
+          displayName: currentUser.displayName
+        });
+        return;
+      }
+
+      const conn = activeConnections.get(selectedFriend);
+      if (conn && conn.open) {
+        try {
+          conn.send({
+            type: 'typing',
+            from: currentUser.username,
+            displayName: currentUser.displayName
+          });
+        } catch {}
+      }
+    }
+
+    // Play subtle mechanical key click or incoming letter tick
+    function playMechanicalKeySound(isIncomingTick = false) {
+      if (!audioState.sfxEnabled || audioState.sfxVolume <= 0) return;
+      ensureAudioContext();
+      if (!audioState.ctx) return;
+
+      try {
+        const now = audioState.ctx.currentTime;
+        const osc = audioState.ctx.createOscillator();
+        const gain = audioState.ctx.createGain();
+        osc.type = isIncomingTick ? 'sine' : 'triangle';
+        const baseFreq = isIncomingTick ? 620 : (240 + Math.random() * 90);
+        osc.frequency.setValueAtTime(baseFreq, now);
+        osc.frequency.exponentialRampToValueAtTime(isIncomingTick ? 360 : 95, now + 0.035);
+
+        const peak = Math.max(0.001, audioState.sfxVolume * (isIncomingTick ? 0.08 : 0.14));
+        gain.gain.setValueAtTime(peak, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
+
+        osc.connect(gain);
+        gain.connect(audioState.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.045);
+      } catch {}
+    }
+
+    function getTrackNotes(trackId) {
+      if (trackId === 'boreal_lullaby') {
+        return [523.25, 659.25, 783.99, 659.25, 493.88, 587.33, 783.99, 587.33];
+      }
+      if (trackId === 'ember_campfire') {
+        return [196.0, 246.94, 293.66, 246.94, 220.0, 261.63, 329.63, 261.63];
+      }
+      return [392.0, 493.88, 587.33, 493.88, 440.0, 523.25, 659.25, 523.25];
+    }
+
+    function playAmbientNote(freq) {
+      if (!audioState.ctx || !audioState.bgmMasterGain || !audioState.bgmEnabled || !audioState.bgmPlaying) return;
+      if (audioState.bgmTrack === 'custom' && audioState.customAudioEl) return;
+
+      try {
+        const now = audioState.ctx.currentTime;
+        const osc = audioState.ctx.createOscillator();
+        const noteGain = audioState.ctx.createGain();
+
+        osc.type = audioState.bgmTrack === 'ember_campfire' ? 'triangle' : 'sine';
+        osc.frequency.setValueAtTime(freq, now);
+
+        noteGain.gain.setValueAtTime(0.0001, now);
+        noteGain.gain.linearRampToValueAtTime(0.18, now + 0.08);
+        noteGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.85);
+
+        osc.connect(noteGain);
+        noteGain.connect(audioState.bgmMasterGain);
+        osc.start(now);
+        osc.stop(now + 0.9);
+      } catch {}
+    }
+
+    function startAmbientBGM() {
+      if (!audioState.bgmEnabled) return;
+      ensureAudioContext();
+      audioState.bgmPlaying = true;
+
+      if (audioState.bgmTrack === 'custom' && audioState.customAudioEl) {
+        audioState.customAudioEl.volume = audioState.bgmVolume;
+        audioState.customAudioEl.play().catch(() => {});
+        updateBGMStatusUI();
+        return;
+      }
+
+      if (audioState.bgmMasterGain && audioState.ctx) {
+        try {
+          audioState.bgmMasterGain.gain.setTargetAtTime(audioState.bgmVolume * 0.45, audioState.ctx.currentTime, 0.12);
+        } catch {}
+      }
+
+      if (audioState.bgmInterval) {
+        clearInterval(audioState.bgmInterval);
+      }
+
+      let step = 0;
+      const tick = () => {
+        if (!audioState.bgmPlaying || !audioState.bgmEnabled) return;
+        const notes = getTrackNotes(audioState.bgmTrack);
+        const freq = notes[step % notes.length];
+        step++;
+        playAmbientNote(freq);
+      };
+
+      tick();
+      audioState.bgmInterval = setInterval(tick, 750);
+      updateBGMStatusUI();
+    }
+
+    function stopAmbientBGM() {
+      audioState.bgmPlaying = false;
+      if (audioState.bgmInterval) {
+        clearInterval(audioState.bgmInterval);
+        audioState.bgmInterval = null;
+      }
+      if (audioState.customAudioEl) {
+        try { audioState.customAudioEl.pause(); } catch {}
+      }
+      if (audioState.bgmMasterGain && audioState.ctx) {
+        try {
+          audioState.bgmMasterGain.gain.setTargetAtTime(0.0001, audioState.ctx.currentTime, 0.08);
+        } catch {}
+      }
+      updateBGMStatusUI();
+    }
+
+    function toggleBGMSetting(enabled) {
+      audioState.bgmEnabled = Boolean(enabled);
+      if (audioState.bgmEnabled) {
+        startAmbientBGM();
+      } else {
+        stopAmbientBGM();
+      }
+      updateBGMStatusUI();
+    }
+
+    function selectBGMTrack(trackId) {
+      audioState.bgmTrack = trackId;
+      if (trackId === 'custom' && !audioState.customAudioEl) {
+        showToast('Click "+ Add Theme Song" to pick an audio file.', 'info');
+      }
+      if (audioState.bgmEnabled) {
+        startAmbientBGM();
+      }
+      updateBGMStatusUI();
+    }
+
+    function handleCustomBGMUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      if (audioState.customAudioEl) {
+        try { audioState.customAudioEl.pause(); } catch {}
+      }
+      const audioEl = new Audio(url);
+      audioEl.loop = true;
+      audioEl.volume = audioState.bgmVolume;
+      audioState.customAudioEl = audioEl;
+      audioState.bgmTrack = 'custom';
+      audioState.customTrackName = file.name;
+
+      const selectEl = document.getElementById('bgm-track-select');
+      if (selectEl) selectEl.value = 'custom';
+
+      if (audioState.bgmEnabled) {
+        startAmbientBGM();
+      }
+      updateBGMStatusUI();
+      showToast(`Loaded theme song "${file.name}"`, 'success');
+      event.target.value = '';
+    }
+
+    function togglePlayPauseBGM() {
+      if (audioState.bgmPlaying) {
+        stopAmbientBGM();
+      } else {
+        audioState.bgmEnabled = true;
+        const toggle = document.getElementById('toggle-bgm');
+        if (toggle) toggle.checked = true;
+        startAmbientBGM();
+      }
+      updateBGMStatusUI();
+    }
+
+    function updateBGMVolume(val) {
+      const pct = Math.max(0, Math.min(100, Number(val) || 0));
+      audioState.bgmVolume = pct / 100;
+      const label = document.getElementById('bgm-vol-label');
+      if (label) label.textContent = `${pct}%`;
+
+      if (audioState.customAudioEl) {
+        audioState.customAudioEl.volume = audioState.bgmVolume;
+      }
+      if (audioState.bgmMasterGain && audioState.ctx && audioState.bgmPlaying) {
+        try {
+          audioState.bgmMasterGain.gain.setTargetAtTime(audioState.bgmVolume * 0.45, audioState.ctx.currentTime, 0.05);
+        } catch {}
+      }
+    }
+
+    function toggleSFXSetting(enabled) {
+      audioState.sfxEnabled = Boolean(enabled);
+    }
+
+    function updateSFXVolume(val) {
+      const pct = Math.max(0, Math.min(100, Number(val) || 0));
+      audioState.sfxVolume = pct / 100;
+      const label = document.getElementById('sfx-vol-label');
+      if (label) label.textContent = `${pct}%`;
+    }
+
+    function updateBGMStatusUI() {
+      const statusLabel = document.getElementById('bgm-status-label');
+      const playBtn = document.getElementById('bgm-play-toggle-btn');
+      const selectEl = document.getElementById('bgm-track-select');
+
+      let trackLabel = 'Starlight Waltz (Built-in)';
+      if (audioState.bgmTrack === 'boreal_lullaby') trackLabel = 'Boreal Lullaby (Built-in)';
+      else if (audioState.bgmTrack === 'ember_campfire') trackLabel = 'Ember Campfire (Built-in)';
+      else if (audioState.bgmTrack === 'custom') trackLabel = audioState.customTrackName || 'Custom Theme Song';
+
+      if (statusLabel) {
+        statusLabel.textContent = `${trackLabel} · ${audioState.bgmPlaying && audioState.bgmEnabled ? 'Playing' : 'Paused'}`;
+      }
+      if (playBtn) {
+        playBtn.textContent = (audioState.bgmPlaying && audioState.bgmEnabled) ? 'Pause Song' : 'Play Song';
+      }
+      if (selectEl && selectEl.value !== audioState.bgmTrack) {
+        selectEl.value = audioState.bgmTrack;
+      }
     }
 
     window.addEventListener('DOMContentLoaded', () => {
