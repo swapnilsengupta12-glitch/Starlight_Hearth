@@ -110,6 +110,79 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
       border-radius: 1.25rem 1.25rem 1.25rem 0.35rem;
     }
+    /* MOBILE MODE PERFORMANCE OPTIMIZATIONS (Zero GPU Lag, Smooth Typing, BGM & SFX Intact) */
+    body.mobile-mode #fantasy-backdrop {
+      display: none !important;
+    }
+    body.mobile-mode .glass-panel,
+    body.mobile-mode .glass-card,
+    body.mobile-mode .bubble-sent,
+    body.mobile-mode .bubble-received,
+    body.mobile-mode header,
+    body.mobile-mode [class*="backdrop-blur"] {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    body.mobile-mode .glass-panel {
+      background: #080c1b !important;
+      border-color: rgba(251, 191, 36, 0.24) !important;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65) !important;
+    }
+    body.mobile-mode .glass-card {
+      background: #10162a !important;
+      border-color: rgba(255, 255, 255, 0.08) !important;
+    }
+    body.mobile-mode .bubble-sent {
+      background: linear-gradient(135deg, #a15209, #78350f) !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+    }
+    body.mobile-mode .bubble-received {
+      background: #11172c !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+    }
+    body.mobile-mode .star-twinkle {
+      animation: none !important;
+      opacity: 0.8 !important;
+    }
+    body.mobile-mode .cottage-window {
+      animation: none !important;
+      filter: none !important;
+      opacity: 0.95 !important;
+    }
+    body.mobile-mode .chimney-smoke,
+    body.mobile-mode .firefly,
+    body.mobile-mode #fireflies-layer,
+    body.mobile-mode .chat-fireflies-layer {
+      display: none !important;
+      animation: none !important;
+    }
+    body.mobile-mode.theme-aurora .glass-panel {
+      background: #061722 !important;
+    }
+    body.mobile-mode.theme-aurora .glass-card {
+      background: #0b2230 !important;
+    }
+    body.mobile-mode.theme-aurora .bubble-received {
+      background: #092333 !important;
+    }
+    body.mobile-mode.theme-crimson .glass-panel {
+      background: #180914 !important;
+    }
+    body.mobile-mode.theme-crimson .glass-card {
+      background: #251020 !important;
+    }
+    body.mobile-mode.theme-crimson .bubble-received {
+      background: #240e1f !important;
+    }
+    body.mobile-mode.theme-twilight .glass-panel {
+      background: #110b22 !important;
+    }
+    body.mobile-mode.theme-twilight .glass-card {
+      background: #1b1236 !important;
+    }
+    body.mobile-mode.theme-twilight .bubble-received {
+      background: #191133 !important;
+    }
     .typewriter-cursor {
       display: inline-block;
       width: 2px;
@@ -276,45 +349,137 @@
   <!-- Reusable Night Village Scenery Template (Injected Inside Active Chat Viewport) -->
   <template id="chat-scenery-template">
     <div class="chat-inner-scenery absolute inset-0 z-0 overflow-hidden pointer-events-none">
-      <div class="absolute inset-0 bg-gradient-to-b from-[#060916]/90 via-[#0d1633]/78 to-[#1a2242]/85"></div>
-      <div class="absolute top-6 right-10 w-44 h-44 rounded-full bg-amber-200/10 blur-2xl"></div>
+      <div class="absolute inset-0 bg-gradient-to-b from-[#060916]/95 via-[#0d1633]/85 to-[#1a2242]/90"></div>
+      <div class="absolute top-6 right-10 w-48 h-48 rounded-full bg-amber-200/10 blur-2xl"></div>
       <svg class="absolute inset-0 w-full h-full object-cover" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMax slice" xmlns="http://www.w3.org/2000/svg">
         <defs>
+          <radialGradient id="chatMoonGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fef3c7" stop-opacity="0.9" />
+            <stop offset="45%" stop-color="#fde68a" stop-opacity="0.6" />
+            <stop offset="85%" stop-color="#f59e0b" stop-opacity="0.1" />
+            <stop offset="100%" stop-color="#f59e0b" stop-opacity="0" />
+          </radialGradient>
+          <radialGradient id="lanternGlowGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fde68a" stop-opacity="0.85" />
+            <stop offset="45%" stop-color="#fbbf24" stop-opacity="0.4" />
+            <stop offset="100%" stop-color="#d97706" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="chatMountainFar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#19244c" stop-opacity="0.8" />
+            <stop offset="100%" stop-color="#0a1026" stop-opacity="0.95" />
+          </linearGradient>
           <linearGradient id="chatHillFar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#141f42" stop-opacity="0.88" />
-            <stop offset="100%" stop-color="#090e21" stop-opacity="0.96" />
+            <stop offset="0%" stop-color="#141f42" stop-opacity="0.92" />
+            <stop offset="100%" stop-color="#090e21" stop-opacity="0.98" />
           </linearGradient>
           <linearGradient id="chatHillNear" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#0d142c" stop-opacity="0.92" />
-            <stop offset="100%" stop-color="#050814" stop-opacity="0.99" />
+            <stop offset="0%" stop-color="#0d142c" stop-opacity="0.95" />
+            <stop offset="100%" stop-color="#050814" stop-opacity="1" />
           </linearGradient>
         </defs>
+
+        <!-- Starfield Group -->
         <g class="chat-stars-group"></g>
+
+        <!-- Detailed Crescent Moon & Aura -->
         <g transform="translate(830, 95)">
-          <circle cx="0" cy="0" r="42" fill="#fde68a" opacity="0.14" />
-          <path d="M -7 -24 A 26 26 0 1 0 20 17 A 21 21 0 1 1 -7 -24 Z" fill="#fef3c7" opacity="0.9" />
+          <circle cx="0" cy="0" r="54" fill="url(#chatMoonGrad)" />
+          <path d="M -9 -28 A 30 30 0 1 0 24 20 A 24 24 0 1 1 -9 -28 Z" fill="#fef3c7" opacity="0.95" />
         </g>
-        <path d="M0 470 L150 345 L310 430 L500 315 L690 425 L870 330 L1000 410 L1000 700 L0 700 Z" fill="#0d1530" opacity="0.78" />
-        <path d="M-20 500 Q 260 415 540 485 T 1020 455 L 1020 700 L -20 700 Z" fill="url(#chatHillFar)" />
+
+        <!-- Distant Mountain Peaks & Pine Ridges -->
+        <path d="M0 450 L120 320 L260 410 L440 290 L620 400 L790 305 L930 380 L1000 340 L1000 700 L0 700 Z" fill="url(#chatMountainFar)" />
+        
+        <!-- Distant Pine Silhouettes on Ridge -->
+        <g fill="#0b1228" opacity="0.9">
+          <polygon points="112,335 120,312 128,335" />
+          <polygon points="124,338 131,318 138,338" />
+          <polygon points="432,305 440,282 448,305" />
+          <polygon points="445,310 452,290 459,310" />
+          <polygon points="782,320 790,298 798,320" />
+        </g>
+
+        <!-- Mid Hills with Pine Clustered Forest -->
+        <path d="M-20 490 Q 250 405 520 470 T 1020 445 L 1020 700 L -20 700 Z" fill="url(#chatHillFar)" />
+        <g fill="#070b1a">
+          <polygon points="70,490 80,445 90,490" />
+          <polygon points="84,492 93,452 102,492" />
+          <polygon points="96,495 104,460 112,495" />
+          <polygon points="480,480 490,438 500,480" />
+          <polygon points="494,482 502,446 510,482" />
+          <polygon points="860,460 870,422 880,460" />
+          <polygon points="874,465 882,432 890,465" />
+        </g>
+
+        <!-- Chimney Smoke Elements (Animated on Desktop, Disabled in Mobile Mode) -->
         <circle cx="195" cy="472" r="6" fill="#cbd5e1" class="chimney-smoke" style="--delay: 0s;" />
         <circle cx="198" cy="472" r="8" fill="#cbd5e1" class="chimney-smoke" style="--delay: 3.2s;" />
         <circle cx="775" cy="462" r="6" fill="#cbd5e1" class="chimney-smoke" style="--delay: 1.6s;" />
-        <path d="M-20 565 Q 340 505 680 555 T 1020 525 L 1020 700 L -20 700 Z" fill="url(#chatHillNear)" />
-        <g transform="translate(150, 492)">
-          <rect x="38" y="-18" width="9" height="22" fill="#080c1a" />
-          <rect x="6" y="12" width="60" height="44" fill="#080c1a" />
-          <polygon points="-2,14 36,-12 74,14" fill="#050812" />
-          <rect x="17" y="24" width="11" height="13" rx="2" fill="#fbbf24" class="cottage-window" style="--delay: 0.4s;" />
-          <rect x="42" y="24" width="11" height="13" rx="2" fill="#f59e0b" class="cottage-window" style="--delay: 1.7s;" />
+
+        <!-- Foreground Knoll with Village Trail & Stone Wall -->
+        <path d="M-20 560 Q 320 495 660 545 T 1020 515 L 1020 700 L -20 700 Z" fill="url(#chatHillNear)" />
+        <path d="M-10 635 Q 280 575 580 610 T 1010 595" stroke="#182348" stroke-width="3" fill="none" opacity="0.6" stroke-dasharray="12,6" />
+
+        <!-- Cottage 1 (Left - Cozy Alpine Tavern) -->
+        <g transform="translate(145, 486)">
+          <!-- Chimney -->
+          <rect x="42" y="-20" width="10" height="24" fill="#080c1a" />
+          <rect x="40" y="-22" width="14" height="4" rx="1" fill="#131c38" />
+          <!-- Main Building Body -->
+          <rect x="6" y="12" width="66" height="48" fill="#070b18" />
+          <!-- Roof with Overhang -->
+          <polygon points="-4,14 39,-15 82,14" fill="#04060e" />
+          <line x1="-3" y1="14" x2="81" y2="14" stroke="#1e294b" stroke-width="2" />
+          <!-- Glowing Windows with Timber Cross-panes -->
+          <rect x="15" y="24" width="13" height="15" rx="2" fill="#fbbf24" class="cottage-window" style="--delay: 0.4s;" />
+          <line x1="21.5" y1="24" x2="21.5" y2="39" stroke="#78350f" stroke-width="1.2" />
+          <line x1="15" y1="31.5" x2="28" y2="31.5" stroke="#78350f" stroke-width="1.2" />
+
+          <rect x="45" y="24" width="13" height="15" rx="2" fill="#f59e0b" class="cottage-window" style="--delay: 1.7s;" />
+          <line x1="51.5" y1="24" x2="51.5" y2="39" stroke="#78350f" stroke-width="1.2" />
+          <line x1="45" y1="31.5" x2="58" y2="31.5" stroke="#78350f" stroke-width="1.2" />
+          <!-- Doorstep -->
+          <rect x="32" y="44" width="10" height="16" fill="#03050a" />
         </g>
-        <g transform="translate(730, 482)">
-          <rect x="38" y="-18" width="9" height="22" fill="#080c1a" />
-          <rect x="6" y="12" width="60" height="44" fill="#080c1a" />
-          <polygon points="-2,14 36,-12 74,14" fill="#050812" />
-          <rect x="17" y="24" width="11" height="13" rx="2" fill="#fde68a" class="cottage-window" style="--delay: 1.1s;" />
-          <rect x="42" y="24" width="11" height="13" rx="2" fill="#fbbf24" class="cottage-window" style="--delay: 2.4s;" />
+
+        <!-- Village Lantern Post 1 (Left) -->
+        <g transform="translate(240, 528)">
+          <circle cx="0" cy="0" r="28" fill="url(#lanternGlowGrad)" />
+          <line x1="0" y1="0" x2="0" y2="28" stroke="#060914" stroke-width="2.5" />
+          <circle cx="0" cy="0" r="3.5" fill="#fef3c7" />
         </g>
-        <path d="M0 620 Q 500 585 1000 612 L 1000 700 L 0 700 Z" fill="#050711" />
+
+        <!-- Cottage 2 (Mid-right - Hearth Cottage) -->
+        <g transform="translate(725, 476)">
+          <!-- Chimney -->
+          <rect x="42" y="-20" width="10" height="24" fill="#080c1a" />
+          <rect x="40" y="-22" width="14" height="4" rx="1" fill="#131c38" />
+          <!-- Main Building Body -->
+          <rect x="6" y="12" width="66" height="48" fill="#070b18" />
+          <!-- Roof with Overhang -->
+          <polygon points="-4,14 39,-15 82,14" fill="#04060e" />
+          <line x1="-3" y1="14" x2="81" y2="14" stroke="#1e294b" stroke-width="2" />
+          <!-- Glowing Windows with Timber Cross-panes -->
+          <rect x="15" y="24" width="13" height="15" rx="2" fill="#fde68a" class="cottage-window" style="--delay: 1.1s;" />
+          <line x1="21.5" y1="24" x2="21.5" y2="39" stroke="#78350f" stroke-width="1.2" />
+          <line x1="15" y1="31.5" x2="28" y2="31.5" stroke="#78350f" stroke-width="1.2" />
+
+          <rect x="45" y="24" width="13" height="15" rx="2" fill="#fbbf24" class="cottage-window" style="--delay: 2.4s;" />
+          <line x1="51.5" y1="24" x2="51.5" y2="39" stroke="#78350f" stroke-width="1.2" />
+          <line x1="45" y1="31.5" x2="58" y2="31.5" stroke="#78350f" stroke-width="1.2" />
+          <!-- Doorstep -->
+          <rect x="32" y="44" width="10" height="16" fill="#03050a" />
+        </g>
+
+        <!-- Village Lantern Post 2 (Right) -->
+        <g transform="translate(820, 518)">
+          <circle cx="0" cy="0" r="28" fill="url(#lanternGlowGrad)" />
+          <line x1="0" y1="0" x2="0" y2="28" stroke="#060914" stroke-width="2.5" />
+          <circle cx="0" cy="0" r="3.5" fill="#fef3c7" />
+        </g>
+
+        <!-- Base Foreground Horizon Silhouette -->
+        <path d="M0 625 Q 500 585 1000 615 L 1000 700 L 0 700 Z" fill="#04060e" />
       </svg>
       <div class="chat-fireflies-layer absolute inset-0"></div>
     </div>
@@ -408,6 +573,20 @@
             </div>
           </div>
           <div class="flex items-center gap-1">
+            <button
+              type="button"
+              id="inbox-mobile-toggle-btn"
+              onclick="toggleMobileMode()"
+              title="Toggle Mobile Mode (Smooth 60fps & zero typing lag)"
+              class="mobile-mode-indicator-btn p-2.5 rounded-xl text-slate-300 hover:text-amber-200 hover:bg-white/10 transition cursor-pointer relative"
+            >
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <rect x="5" y="2" width="14" height="20" rx="3" />
+                <path d="M12 18h.01" stroke-width="2.5" />
+                <path d="M9 5h6" stroke-width="1.2" />
+              </svg>
+              <span class="mobile-mode-dot absolute top-2 right-2 w-2 h-2 rounded-full bg-slate-500 transition-colors"></span>
+            </button>
             <button type="button" onclick="openActivitiesModal()" title="Hangout Activities (Coming Soon)" class="p-2.5 rounded-xl text-amber-300/80 hover:text-amber-200 hover:bg-amber-400/10 transition">
               <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="3"/><path d="M6 12h4M8 10v4"/><circle cx="15" cy="11" r="1" fill="currentColor"/><circle cx="18" cy="13" r="1" fill="currentColor"/></svg>
             </button>
@@ -490,6 +669,19 @@
             <div class="flex items-center gap-1.5">
               <button
                 type="button"
+                id="chat-mobile-toggle-btn"
+                onclick="toggleMobileMode()"
+                title="Toggle Mobile Mode (Smooth 60fps & zero typing lag)"
+                class="mobile-mode-indicator-btn p-2 rounded-xl text-slate-300 hover:text-amber-200 hover:bg-white/10 transition cursor-pointer relative"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <rect x="5" y="2" width="14" height="20" rx="3" />
+                  <path d="M12 18h.01" stroke-width="2.5" />
+                </svg>
+                <span class="mobile-mode-dot absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-slate-500 transition-colors"></span>
+              </button>
+              <button
+                type="button"
                 onclick="reconnectActiveFriend()"
                 title="Reconnect peer"
                 class="p-2 rounded-xl text-slate-300 hover:text-amber-200 hover:bg-white/10 transition cursor-pointer"
@@ -568,6 +760,24 @@
         <button type="button" onclick="closeSettingsModal()" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
+      </div>
+      <!-- Mobile Performance Mode Toggle Card -->
+      <div class="glass-card rounded-2xl p-4 space-y-2">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <h4 class="text-sm font-semibold text-amber-200 flex items-center gap-2">
+              <span>Mobile Mode</span>
+              <span id="settings-mobile-badge" class="text-[10px] px-2 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-white/10">Standard</span>
+            </h4>
+            <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+              Disables heavy blur & animations for smooth 60fps typing. Keeps BGM and key/quill SFX fully active.
+            </p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input type="checkbox" id="toggle-mobile-mode" onchange="setMobileMode(this.checked)" class="sr-only peer">
+            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+          </label>
+        </div>
       </div>
       <div class="glass-card rounded-2xl p-4 space-y-2.5">
         <h4 class="text-sm font-semibold text-amber-200">Night Backdrop Theme</h4>
@@ -721,6 +931,7 @@
     const STORAGE_ACCOUNTS_KEY = 'starlight_hearth_accounts_v1';
     const STORAGE_SESSION_KEY  = 'starlight_hearth_active_user_v1';
     const STORAGE_BG_THEME_KEY = 'starlight_hearth_bg_theme_v1';
+    const STORAGE_MOBILE_MODE_KEY = 'starlight_hearth_mobile_mode_v1';
     const PEER_NAMESPACE       = 'starlight-hearth-village-v1-';
     const DEMO_BOT_USERNAME    = 'lantern_echo';
     const GROUP_PREFIX         = 'group_';
@@ -728,6 +939,8 @@
     let currentUser = null;
     let selectedFriend = null;
     let currentGroups = {};
+    let mobileModeActive = false;
+    let composerResizeRaf = null;
     let peer = null;
     let peerReady = false;
     let activeConnections = new Map();
@@ -938,32 +1151,131 @@
         } catch {}
       } else if (event.key === STORAGE_BG_THEME_KEY && event.newValue) {
         setBackgroundTheme(event.newValue);
+      } else if (event.key === STORAGE_MOBILE_MODE_KEY && event.newValue !== null) {
+        setMobileMode(event.newValue === 'true', { silent: true });
       }
+    }
+    function isMobileDevice() {
+      return (
+        window.innerWidth <= 768 ||
+        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      );
+    }
+    function initMobileMode() {
+      let saved = null;
+      try {
+        saved = localStorage.getItem(STORAGE_MOBILE_MODE_KEY);
+      } catch {}
+      // If user has a saved preference, respect it; otherwise auto-enable on mobile devices
+      const shouldEnable = saved !== null ? saved === 'true' : isMobileDevice();
+      setMobileMode(shouldEnable, { silent: true });
+    }
+    function setMobileMode(enable, options = {}) {
+      mobileModeActive = Boolean(enable);
+      try {
+        localStorage.setItem(STORAGE_MOBILE_MODE_KEY, String(mobileModeActive));
+      } catch {}
+      document.body.classList.toggle('mobile-mode', mobileModeActive);
+      document.documentElement.classList.toggle('mobile-mode', mobileModeActive);
+
+      // Sync checkbox in Settings modal
+      const toggleEl = document.getElementById('toggle-mobile-mode');
+      if (toggleEl && toggleEl.checked !== mobileModeActive) {
+        toggleEl.checked = mobileModeActive;
+      }
+
+      // Sync status badge in Settings modal
+      const badgeEl = document.getElementById('settings-mobile-badge');
+      if (badgeEl) {
+        if (mobileModeActive) {
+          badgeEl.textContent = 'Smooth 60fps';
+          badgeEl.className = 'text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-500/20 text-amber-200 border border-amber-400/40';
+        } else {
+          badgeEl.textContent = 'Standard';
+          badgeEl.className = 'text-[10px] px-2 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-white/10';
+        }
+      }
+
+      // Sync header toggle buttons and status dots
+      const dots = document.querySelectorAll('.mobile-mode-dot');
+      dots.forEach((dot) => {
+        dot.className = `mobile-mode-dot absolute top-1.5 right-1.5 w-2 h-2 rounded-full transition-colors ${
+          mobileModeActive ? 'bg-amber-400 shadow-[0_0_6px_#fbbf24]' : 'bg-slate-500'
+        }`;
+      });
+
+      const btns = document.querySelectorAll('.mobile-mode-indicator-btn');
+      btns.forEach((btn) => {
+        if (mobileModeActive) {
+          btn.classList.add('text-amber-300', 'bg-amber-500/15', 'border-amber-400/30');
+          btn.classList.remove('text-slate-300');
+        } else {
+          btn.classList.remove('text-amber-300', 'bg-amber-500/15', 'border-amber-400/30');
+          btn.classList.add('text-slate-300');
+        }
+      });
+
+      // Refresh scenery starfield and fireflies for the new mode
+      const chatScenery = document.querySelector('.chat-inner-scenery');
+      if (chatScenery) {
+        const starsGroup = chatScenery.querySelector('.chat-stars-group');
+        const firefliesLayer = chatScenery.querySelector('.chat-fireflies-layer');
+        if (starsGroup) populateStarsIntoGroup(starsGroup, 36, 1000, 700);
+        if (firefliesLayer) populateFirefliesIntoLayer(firefliesLayer, 10);
+      }
+      if (!mobileModeActive) {
+        const svgStars = document.getElementById('svg-stars');
+        const firefliesLayer = document.getElementById('fireflies-layer');
+        if (svgStars && svgStars.children.length === 0) {
+          populateStarsIntoGroup(svgStars, 65, 1440, 900);
+        }
+        if (firefliesLayer && firefliesLayer.children.length === 0) {
+          populateFirefliesIntoLayer(firefliesLayer, 16);
+        }
+      }
+
+      if (!options.silent) {
+        showToast(
+          mobileModeActive
+            ? 'Mobile Mode Active: Zero lag & smooth typing ✨'
+            : 'Mobile Mode Off: Full fantasy effects restored',
+          'info'
+        );
+      }
+    }
+    function toggleMobileMode() {
+      setMobileMode(!mobileModeActive);
     }
     // Populate twinkling SVG stars into a target <g> container
     function populateStarsIntoGroup(groupEl, count, width, height) {
       if (!groupEl) return;
       groupEl.innerHTML = '';
-      for (let i = 0; i < count; i++) {
+      const actualCount = mobileModeActive ? Math.min(count, 28) : count;
+      for (let i = 0; i < actualCount; i++) {
         const cx = ((i * 73 + 29) % 100) / 100 * width;
         const cy = ((i * 41 + 17) % 52) / 100 * height;
         const r = (i % 3 === 0) ? 1.7 : ((i % 2 === 0) ? 1.2 : 0.85);
-        const dur = (3 + (i % 5) * 1.1).toFixed(1) + 's';
-        const delay = ((i % 7) * 0.65).toFixed(2) + 's';
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', cx.toFixed(1));
         circle.setAttribute('cy', cy.toFixed(1));
         circle.setAttribute('r', r.toFixed(2));
         circle.setAttribute('fill', i % 4 === 0 ? '#fde68a' : '#f8fafc');
-        circle.classList.add('star-twinkle');
-        circle.style.setProperty('--dur', dur);
-        circle.style.setProperty('--delay', delay);
+        if (!mobileModeActive) {
+          const dur = (3 + (i % 5) * 1.1).toFixed(1) + 's';
+          const delay = ((i % 7) * 0.65).toFixed(2) + 's';
+          circle.classList.add('star-twinkle');
+          circle.style.setProperty('--dur', dur);
+          circle.style.setProperty('--delay', delay);
+        } else {
+          circle.setAttribute('opacity', '0.85');
+        }
         groupEl.appendChild(circle);
       }
     }
     function populateFirefliesIntoLayer(layerEl, count) {
       if (!layerEl) return;
       layerEl.innerHTML = '';
+      if (mobileModeActive) return; // Zero floating animated firefly DOM nodes in Mobile Mode
       for (let i = 0; i < count; i++) {
         const dot = document.createElement('span');
         dot.className = 'firefly';
@@ -991,8 +1303,10 @@
       stage.prepend(clone);
     }
     function initFantasyBackdrop() {
-      populateStarsIntoGroup(document.getElementById('svg-stars'), 65, 1440, 900);
-      populateFirefliesIntoLayer(document.getElementById('fireflies-layer'), 16);
+      if (!mobileModeActive) {
+        populateStarsIntoGroup(document.getElementById('svg-stars'), 65, 1440, 900);
+        populateFirefliesIntoLayer(document.getElementById('fireflies-layer'), 16);
+      }
       injectChatScenery();
     }
     function setBackgroundTheme(themeName) {
@@ -1570,14 +1884,19 @@
         return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="underline decoration-amber-300/70 text-amber-200 hover:text-amber-100 break-all">${url}</a>`;
       });
     }
-    function scrollFeedToBottom() {
+    function scrollFeedToBottom(immediate = false) {
       const feed = document.getElementById('messages-feed');
-      requestAnimationFrame(() => {
-        feed.scrollTo({
-          top: feed.scrollHeight,
-          behavior: 'smooth'
+      if (!feed) return;
+      if (immediate || mobileModeActive) {
+        feed.scrollTop = feed.scrollHeight;
+      } else {
+        requestAnimationFrame(() => {
+          feed.scrollTo({
+            top: feed.scrollHeight,
+            behavior: 'smooth'
+          });
         });
-      });
+      }
     }
     function renderQuotedBlock(replyTo, isSent = false) {
       if (!replyTo) return '';
@@ -1662,15 +1981,15 @@
         return;
       }
       let index = 0;
-      const charDelay = 26;
+      const stepSize = mobileModeActive ? 2 : 1;
+      const charDelay = mobileModeActive ? 32 : 26;
       const typeInterval = setInterval(() => {
         if (index < text.length) {
-          textSpan.textContent += text.charAt(index);
-          if (index % 2 === 0) {
-            playMechanicalKeySound(true);
-          }
-          index++;
-          scrollFeedToBottom();
+          const nextSlice = text.substr(index, stepSize);
+          textSpan.textContent += nextSlice;
+          playMechanicalKeySound(true);
+          index += stepSize;
+          scrollFeedToBottom(true);
         } else {
           clearInterval(typeInterval);
           textSpan.innerHTML = linkifyText(text);
@@ -1678,7 +1997,7 @@
             if (cursorSpan && cursorSpan.parentNode) {
               cursorSpan.remove();
             }
-          }, 450);
+          }, 350);
         }
       }, charDelay);
     }
@@ -2369,11 +2688,19 @@
         }
       }
     }
+    function scheduleComposerResize(textarea) {
+      if (composerResizeRaf) return;
+      composerResizeRaf = requestAnimationFrame(() => {
+        composerResizeRaf = null;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+      });
+    }
+
     // Auto-resize composer and emit typing indicator + key SFX
     function handleComposerInput(event) {
       const textarea = event.target;
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+      scheduleComposerResize(textarea);
       playMechanicalKeySound(false);
       if (!selectedFriend || selectedFriend === DEMO_BOT_USERNAME || !currentUser) return;
       const now = Date.now();
@@ -2600,6 +2927,7 @@
       }
     }
     window.addEventListener('DOMContentLoaded', () => {
+      initMobileMode();
       initSavedBackgroundTheme();
       initFantasyBackdrop();
       renderSavedAccountsChips();
