@@ -183,6 +183,56 @@
     body.mobile-mode.theme-twilight .bubble-received {
       background: #191133 !important;
     }
+    /* Layer Isolation & Containment for 60fps Mobile Performance */
+    .chat-inner-scenery {
+      contain: strict;
+      will-change: auto;
+    }
+    #chat-scenic-body {
+      contain: content;
+    }
+    #messages-feed {
+      contain: layout style;
+    }
+    #message-input {
+      transform: translateZ(0);
+      will-change: auto;
+    }
+    /* Header Action Buttons High-Contrast & Tactile Tap Targets */
+    .chat-header-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 38px;
+      min-height: 38px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #cbd5e1;
+      border-radius: 0.75rem;
+      transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .chat-header-btn:hover {
+      background: rgba(251, 191, 36, 0.15);
+      border-color: rgba(251, 191, 36, 0.35);
+      color: #fde68a;
+    }
+    /* Explicit High-Contrast styles in Mobile Mode so Reconnect & Clear Chat are clearly visible */
+    body.mobile-mode .chat-header-btn {
+      background: rgba(24, 34, 66, 0.96) !important;
+      border: 1.5px solid rgba(251, 191, 36, 0.5) !important;
+      color: #fde68a !important;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+    }
+    body.mobile-mode .chat-header-btn svg {
+      stroke: #fde68a !important;
+      stroke-width: 2.2 !important;
+    }
+    body.mobile-mode .chat-header-btn:active,
+    body.mobile-mode .chat-header-btn:hover {
+      background: rgba(245, 158, 11, 0.3) !important;
+      border-color: rgba(251, 191, 36, 0.85) !important;
+      color: #ffffff !important;
+    }
     .typewriter-cursor {
       display: inline-block;
       width: 2px;
@@ -672,7 +722,7 @@
                 id="chat-mobile-toggle-btn"
                 onclick="toggleMobileMode()"
                 title="Toggle Mobile Mode (Smooth 60fps & zero typing lag)"
-                class="mobile-mode-indicator-btn p-2 rounded-xl text-slate-300 hover:text-amber-200 hover:bg-white/10 transition cursor-pointer relative"
+                class="chat-header-btn mobile-mode-indicator-btn p-2 rounded-xl text-slate-200 bg-white/[0.06] border border-white/10 hover:text-amber-200 hover:border-amber-400/40 hover:bg-white/15 transition cursor-pointer relative"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                   <rect x="5" y="2" width="14" height="20" rx="3" />
@@ -682,17 +732,19 @@
               </button>
               <button
                 type="button"
+                id="chat-reconnect-btn"
                 onclick="reconnectActiveFriend()"
                 title="Reconnect peer"
-                class="p-2 rounded-xl text-slate-300 hover:text-amber-200 hover:bg-white/10 transition cursor-pointer"
+                class="chat-header-btn p-2 rounded-xl text-slate-200 bg-white/[0.06] border border-white/10 hover:text-amber-200 hover:border-amber-400/40 hover:bg-white/15 transition cursor-pointer"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
               </button>
               <button
                 type="button"
+                id="chat-clear-btn"
                 onclick="clearCurrentRoomView()"
                 title="Clear messages on screen"
-                class="p-2 rounded-xl text-slate-300 hover:text-amber-200 hover:bg-white/10 transition cursor-pointer"
+                class="chat-header-btn p-2 rounded-xl text-slate-200 bg-white/[0.06] border border-white/10 hover:text-amber-200 hover:border-amber-400/40 hover:bg-white/15 transition cursor-pointer"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
               </button>
@@ -738,7 +790,7 @@
               onkeydown="handleComposerKeydown(event)"
               oninput="handleComposerInput(event)"
               placeholder="Write a whisper... (Enter to send, Shift+Enter for new line)"
-              class="flex-1 max-h-32 px-3.5 py-2.5 rounded-xl bg-night-900/90 border border-white/10 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-400/60 resize-none leading-snug transition"
+              class="flex-1 max-h-32 px-3.5 py-2.5 rounded-xl bg-night-900/90 border border-white/10 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-400/60 resize-none leading-snug transition-colors duration-100"
             ></textarea>
             <button
               type="submit"
@@ -958,6 +1010,10 @@
     const audioState = {
       ctx: null,
       bgmMasterGain: null,
+      bgmFilter: null,
+      sfxMasterGain: null,
+      keyBuffers: [],
+      quillBuffer: null,
       bgmEnabled: true,
       bgmVolume: 0.45,
       bgmPlaying: false,
@@ -968,6 +1024,41 @@
       sfxEnabled: true,
       sfxVolume: 0.45
     };
+    function initPreRenderedSFXBuffers(ctx) {
+      if (audioState.keyBuffers && audioState.keyBuffers.length > 0) return;
+      try {
+        const sr = ctx.sampleRate || 44100;
+        const keyPitches = [230, 260, 290];
+        audioState.keyBuffers = keyPitches.map((baseFreq) => {
+          const duration = 0.045;
+          const frameCount = Math.floor(sr * duration);
+          const buf = ctx.createBuffer(1, frameCount, sr);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < frameCount; i++) {
+            const t = i / sr;
+            const transient = (Math.random() * 2 - 1) * Math.exp(-t * 850);
+            const freq = baseFreq * (1 + 0.5 * Math.exp(-t * 220));
+            const body = Math.sin(2 * Math.PI * freq * t) * Math.exp(-t * 95);
+            data[i] = 0.32 * transient + 0.68 * body;
+          }
+          return buf;
+        });
+
+        const quillDuration = 0.038;
+        const quillFrames = Math.floor(sr * quillDuration);
+        const qBuf = ctx.createBuffer(1, quillFrames, sr);
+        const qData = qBuf.getChannelData(0);
+        for (let i = 0; i < quillFrames; i++) {
+          const t = i / sr;
+          const noise = (Math.random() * 2 - 1) * Math.exp(-t * 1100);
+          const tone = Math.sin(2 * Math.PI * 680 * t) * Math.exp(-t * 140);
+          qData[i] = 0.45 * noise + 0.55 * tone;
+        }
+        audioState.quillBuffer = qBuf;
+      } catch (err) {
+        console.warn('SFX buffer synthesis failed:', err);
+      }
+    }
     function ensureAudioContext() {
       if (audioState.ctx) {
         if (audioState.ctx.state === 'suspended') {
@@ -981,9 +1072,24 @@
         const ctx = new AudioCtx();
         const master = ctx.createGain();
         master.gain.setValueAtTime(0.0001, ctx.currentTime);
+
+        const bgmFilter = ctx.createBiquadFilter();
+        bgmFilter.type = 'lowpass';
+        bgmFilter.frequency.setValueAtTime(1800, ctx.currentTime);
+        bgmFilter.Q.setValueAtTime(1.1, ctx.currentTime);
+        bgmFilter.connect(master);
         master.connect(ctx.destination);
+
+        const sfxMaster = ctx.createGain();
+        sfxMaster.gain.setValueAtTime(audioState.sfxVolume * 0.75, ctx.currentTime);
+        sfxMaster.connect(ctx.destination);
+
         audioState.ctx = ctx;
         audioState.bgmMasterGain = master;
+        audioState.bgmFilter = bgmFilter;
+        audioState.sfxMasterGain = sfxMaster;
+
+        initPreRenderedSFXBuffers(ctx);
       } catch (err) {
         console.warn('WebAudio init failed:', err);
       }
@@ -2692,8 +2798,15 @@
       if (composerResizeRaf) return;
       composerResizeRaf = requestAnimationFrame(() => {
         composerResizeRaf = null;
-        textarea.style.height = 'auto';
-        textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+        if (!textarea.value || textarea.value.length === 0) {
+          textarea.style.height = '';
+          return;
+        }
+        // Avoid collapsing to 'auto' if single line fits in normal height
+        if (textarea.scrollHeight > textarea.clientHeight || textarea.value.includes('\n') || textarea.clientHeight > 48) {
+          textarea.style.height = 'auto';
+          textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+        }
       });
     }
 
@@ -2704,8 +2817,14 @@
       playMechanicalKeySound(false);
       if (!selectedFriend || selectedFriend === DEMO_BOT_USERNAME || !currentUser) return;
       const now = Date.now();
-      if (now - lastTypingSentTime < 1000) return;
+      if (now - lastTypingSentTime < 1200) return;
       lastTypingSentTime = now;
+      // Defer peer typing indicator network broadcast out of keypress event stack
+      setTimeout(dispatchTypingIndicatorPacket, 0);
+    }
+
+    function dispatchTypingIndicatorPacket() {
+      if (!selectedFriend || !currentUser) return;
       if (isGroupChatId(selectedFriend)) {
         const members = (currentGroups[selectedFriend]?.members || []).filter((m) => m !== currentUser.username);
         members.forEach((m) => {
@@ -2738,24 +2857,45 @@
         } catch {}
       }
     }
-    // Play subtle mechanical key click or incoming letter tick
+    // Play subtle mechanical key click or incoming letter tick using pre-rendered audio buffers
     function playMechanicalKeySound(isIncomingTick = false) {
       if (!audioState.sfxEnabled || audioState.sfxVolume <= 0) return;
       ensureAudioContext();
-      if (!audioState.ctx) return;
+      const ctx = audioState.ctx;
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      const buffer = isIncomingTick
+        ? audioState.quillBuffer
+        : (audioState.keyBuffers && audioState.keyBuffers.length > 0
+            ? audioState.keyBuffers[Math.floor(Math.random() * audioState.keyBuffers.length)]
+            : null);
+
+      if (buffer && audioState.sfxMasterGain) {
+        try {
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audioState.sfxMasterGain);
+          source.start(0);
+          return;
+        } catch {}
+      }
+
+      // Safe fallback if audio buffers are not yet initialized
       try {
-        const now = audioState.ctx.currentTime;
-        const osc = audioState.ctx.createOscillator();
-        const gain = audioState.ctx.createGain();
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
         osc.type = isIncomingTick ? 'sine' : 'triangle';
-        const baseFreq = isIncomingTick ? 620 : (240 + Math.random() * 90);
+        const baseFreq = isIncomingTick ? 620 : 260;
         osc.frequency.setValueAtTime(baseFreq, now);
-        osc.frequency.exponentialRampToValueAtTime(isIncomingTick ? 360 : 95, now + 0.035);
-        const peak = Math.max(0.001, audioState.sfxVolume * (isIncomingTick ? 0.08 : 0.14));
-        gain.gain.setValueAtTime(peak, now);
+        osc.frequency.exponentialRampToValueAtTime(isIncomingTick ? 360 : 105, now + 0.035);
+        gain.gain.setValueAtTime(audioState.sfxVolume * 0.1, now);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
         osc.connect(gain);
-        gain.connect(audioState.ctx.destination);
+        gain.connect(ctx.destination);
         osc.start(now);
         osc.stop(now + 0.045);
       } catch {}
@@ -2773,18 +2913,91 @@
       if (!audioState.ctx || !audioState.bgmMasterGain || !audioState.bgmEnabled || !audioState.bgmPlaying) return;
       if (audioState.bgmTrack === 'custom' && audioState.customAudioEl) return;
       try {
-        const now = audioState.ctx.currentTime;
-        const osc = audioState.ctx.createOscillator();
-        const noteGain = audioState.ctx.createGain();
-        osc.type = audioState.bgmTrack === 'ember_campfire' ? 'triangle' : 'sine';
-        osc.frequency.setValueAtTime(freq, now);
-        noteGain.gain.setValueAtTime(0.0001, now);
-        noteGain.gain.linearRampToValueAtTime(0.18, now + 0.08);
-        noteGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.85);
-        osc.connect(noteGain);
-        noteGain.connect(audioState.bgmMasterGain);
-        osc.start(now);
-        osc.stop(now + 0.9);
+        const ctx = audioState.ctx;
+        const now = ctx.currentTime;
+        const targetBus = audioState.bgmFilter || audioState.bgmMasterGain;
+
+        if (audioState.bgmTrack === 'boreal_lullaby') {
+          // Boreal Lullaby: Music box chime with soft crystal sparkle
+          const osc1 = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const noteGain = ctx.createGain();
+
+          osc1.type = 'sine';
+          osc1.frequency.setValueAtTime(freq, now);
+
+          osc2.type = 'sine';
+          osc2.frequency.setValueAtTime(freq * 2.003, now);
+
+          noteGain.gain.setValueAtTime(0.0001, now);
+          noteGain.gain.linearRampToValueAtTime(0.19, now + 0.06);
+          noteGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.25);
+
+          const subGain = ctx.createGain();
+          subGain.gain.value = 0.22;
+          osc2.connect(subGain);
+          subGain.connect(noteGain);
+          osc1.connect(noteGain);
+
+          noteGain.connect(targetBus);
+          osc1.start(now);
+          osc2.start(now);
+          osc1.stop(now + 1.3);
+          osc2.stop(now + 1.3);
+        } else if (audioState.bgmTrack === 'ember_campfire') {
+          // Ember Campfire: Warm, resonant low hearth pulse
+          const osc = ctx.createOscillator();
+          const sub = ctx.createOscillator();
+          const noteGain = ctx.createGain();
+
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now);
+          sub.type = 'sine';
+          sub.frequency.setValueAtTime(freq * 0.5, now);
+
+          noteGain.gain.setValueAtTime(0.0001, now);
+          noteGain.gain.linearRampToValueAtTime(0.22, now + 0.12);
+          noteGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.4);
+
+          const subGain = ctx.createGain();
+          subGain.gain.value = 0.35;
+          sub.connect(subGain);
+          subGain.connect(noteGain);
+          osc.connect(noteGain);
+
+          noteGain.connect(targetBus);
+          osc.start(now);
+          sub.start(now);
+          osc.stop(now + 1.45);
+          sub.stop(now + 1.45);
+        } else {
+          // Starlight Waltz: Warm harp & acoustic chime
+          const osc1 = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const noteGain = ctx.createGain();
+
+          osc1.type = 'sine';
+          osc1.frequency.setValueAtTime(freq, now);
+
+          osc2.type = 'triangle';
+          osc2.frequency.setValueAtTime(freq * 1.5, now);
+
+          noteGain.gain.setValueAtTime(0.0001, now);
+          noteGain.gain.linearRampToValueAtTime(0.24, now + 0.07);
+          noteGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.3);
+
+          const harmonicGain = ctx.createGain();
+          harmonicGain.gain.value = 0.18;
+          osc2.connect(harmonicGain);
+          harmonicGain.connect(noteGain);
+          osc1.connect(noteGain);
+
+          noteGain.connect(targetBus);
+          osc1.start(now);
+          osc2.start(now);
+          osc1.stop(now + 1.35);
+          osc2.stop(now + 1.35);
+        }
       } catch {}
     }
     function startAmbientBGM() {
@@ -2907,6 +3120,11 @@
       audioState.sfxVolume = pct / 100;
       const label = document.getElementById('sfx-vol-label');
       if (label) label.textContent = `${pct}%`;
+      if (audioState.sfxMasterGain && audioState.ctx) {
+        try {
+          audioState.sfxMasterGain.gain.setValueAtTime(audioState.sfxVolume * 0.75, audioState.ctx.currentTime);
+        } catch {}
+      }
     }
     function updateBGMStatusUI() {
       const statusLabel = document.getElementById('bgm-status-label');
